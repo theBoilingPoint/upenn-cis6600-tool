@@ -11,8 +11,8 @@ import math;
 
 # The name of the command. 
 
-class TerrodeCommand(om.MPxCommand):
-    NAME = "terrode"
+class TerroderCommand(om.MPxCommand):
+    NAME = "terroder"
     CELL_SIZE_FLAG = "-cs"
     CELL_SIZE_LONG_FLAG = "-cellSize"
 
@@ -23,8 +23,8 @@ class TerrodeCommand(om.MPxCommand):
         argDb = om.MArgDatabase(self.syntax(), args)
 
         cellSizeVal = 0.025
-        if argDb.isFlagSet(TerrodeCommand.CELL_SIZE_FLAG):
-            cellSizeVal = argDb.flagArgumentDouble(TerrodeCommand.CELL_SIZE_FLAG, 0)
+        if argDb.isFlagSet(TerroderCommand.CELL_SIZE_FLAG):
+            cellSizeVal = argDb.flagArgumentDouble(TerroderCommand.CELL_SIZE_FLAG, 0)
 
         om.MGlobal.displayInfo(f"[DEBUG] grid size: {cellSizeVal}")
 
@@ -80,12 +80,12 @@ class TerrodeCommand(om.MPxCommand):
     @staticmethod
     def createSyntax():
         syntax = om.MSyntax()
-        syntax.addFlag(TerrodeCommand.CELL_SIZE_FLAG, TerrodeCommand.CELL_SIZE_LONG_FLAG, om.MSyntax.kDouble)
+        syntax.addFlag(TerroderCommand.CELL_SIZE_FLAG, TerroderCommand.CELL_SIZE_LONG_FLAG, om.MSyntax.kDouble)
         return syntax
     
     @staticmethod
     def createCommand():
-        return TerrodeCommand()
+        return TerroderCommand()
 
 def maya_useNewAPI():
     pass
@@ -94,9 +94,9 @@ def maya_useNewAPI():
 def initializePlugin(plugin):
     pluginFn = om.MFnPlugin(plugin)
         # Must register syntaxCreator as well
-    pluginFn.registerCommand(TerrodeCommand.NAME, TerrodeCommand.createCommand, TerrodeCommand.createSyntax)
+    pluginFn.registerCommand(TerroderCommand.NAME, TerroderCommand.createCommand, TerroderCommand.createSyntax)
 
 # Uninitialize the plugin
 def uninitializePlugin(plugin):
     mplugin = om.MFnPlugin(plugin)
-    mplugin.deregisterCommand(TerrodeCommand.NAME)
+    mplugin.deregisterCommand(TerroderCommand.NAME)
