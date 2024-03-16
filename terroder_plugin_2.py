@@ -36,7 +36,7 @@ class TerroderCommand(om.MPxCommand):
             self.setResult("Did not execute command due to an error.")
             return
         
-        selectedMesh = TerrodeCommand.nameToMesh(selectedObjNames[0])
+        selectedMesh = TerroderCommand.nameToMesh(selectedObjNames[0])
 
         bb = cmds.exactWorldBoundingBox(selectedObjNames[0])
         bbMin = bb[0:3]
