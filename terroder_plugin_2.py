@@ -36,9 +36,7 @@ class TerroderCommand(om.MPxCommand):
             self.setResult("Did not execute command due to an error.")
             return
         
-        selectionList = om.MSelectionList()
-        selectionList.add(selectedObjNames[0])
-        selectedMesh = om.MFnMesh(selectionList.getDagPath(0))
+        selectedMesh = TerrodeCommand.nameToMesh(selectedObjNames[0])
 
         bb = cmds.exactWorldBoundingBox(selectedObjNames[0])
         bbMin = bb[0:3]
@@ -74,6 +72,21 @@ class TerroderCommand(om.MPxCommand):
         om.MGlobal.displayInfo(f"uplift: {uplift}")
 
         self.setResult("Executed command")
+    
+    @staticmethod
+    def nameToMesh(name):
+        selectedMesh = None
+        selectionList = om.MSelectionList()
+        selectionList.add(name)
+        try:
+            selectedMesh = om.MFnMesh(selectionList.getDependNode(0))
+        except ValueError:
+            selectedMesh = om.MFnMesh(selectionList.getDagPath(0))
+        
+        if not selectedMesh:
+            raise RuntimeError(f"Couldn't find a mesh named '{name}'.")
+
+        return selectedMesh
     
     # Required to parse arguments
     # Needed to add this to avoid crashing
