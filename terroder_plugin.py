@@ -11,8 +11,8 @@ import math;
 
 # The name of the command. 
 
-class UpliftGridCommand(om.MPxCommand):
-    NAME = "computeUpliftGrid"
+class TerroderCommand(om.MPxCommand):
+    NAME = "terroder"
     CELL_SIZE_FLAG = "-cs"
     CELL_SIZE_LONG_FLAG = "-cellSize"
 
@@ -23,8 +23,8 @@ class UpliftGridCommand(om.MPxCommand):
         argDb = om.MArgDatabase(self.syntax(), args)
 
         cellSizeVal = 0.025
-        if argDb.isFlagSet(UpliftGridCommand.CELL_SIZE_FLAG):
-            cellSizeVal = argDb.flagArgumentDouble(UpliftGridCommand.CELL_SIZE_FLAG, 0)
+        if argDb.isFlagSet(TerroderCommand.CELL_SIZE_FLAG):
+            cellSizeVal = argDb.flagArgumentDouble(TerroderCommand.CELL_SIZE_FLAG, 0)
 
         om.MGlobal.displayInfo(f"[DEBUG] grid size: {cellSizeVal}")
 
@@ -36,7 +36,7 @@ class UpliftGridCommand(om.MPxCommand):
             self.setResult("Did not execute command due to an error.")
             return
         
-        selectedMesh = UpliftGridCommand.nameToMesh(selectedObjNames[0])
+        selectedMesh = TerroderCommand.nameToMesh(selectedObjNames[0])
 
         bb = cmds.exactWorldBoundingBox(selectedObjNames[0])
         bbMin = bb[0:3]
@@ -69,7 +69,7 @@ class UpliftGridCommand(om.MPxCommand):
                     uplift[i][k] = hitPoint.y
         
         # Currently uplift is populated with y coordinates of a grid
-        om.MGlobal.displayInfo(f"uplift: {uplift}")
+        om.MGlobal.displayInfo(f"[DEBUG] uplift: {uplift}")
 
         self.setResult("Executed command")
     
@@ -98,12 +98,12 @@ class UpliftGridCommand(om.MPxCommand):
     @staticmethod
     def createSyntax():
         syntax = om.MSyntax()
-        syntax.addFlag(UpliftGridCommand.CELL_SIZE_FLAG, UpliftGridCommand.CELL_SIZE_LONG_FLAG, om.MSyntax.kDouble)
+        syntax.addFlag(TerroderCommand.CELL_SIZE_FLAG, TerroderCommand.CELL_SIZE_LONG_FLAG, om.MSyntax.kDouble)
         return syntax
     
     @staticmethod
     def createCommand():
-        return UpliftGridCommand()
+        return TerroderCommand()
 
 def maya_useNewAPI():
     pass
@@ -112,9 +112,9 @@ def maya_useNewAPI():
 def initializePlugin(plugin):
     pluginFn = om.MFnPlugin(plugin)
         # Must register syntaxCreator as well
-    pluginFn.registerCommand(UpliftGridCommand.NAME, UpliftGridCommand.createCommand, UpliftGridCommand.createSyntax)
+    pluginFn.registerCommand(TerroderCommand.NAME, TerroderCommand.createCommand, TerroderCommand.createSyntax)
 
 # Uninitialize the plugin
 def uninitializePlugin(plugin):
     mplugin = om.MFnPlugin(plugin)
-    mplugin.deregisterCommand(UpliftGridCommand.NAME)
+    mplugin.deregisterCommand(TerroderCommand.NAME)
