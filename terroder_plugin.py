@@ -22,7 +22,7 @@ class TerroderCommand(om.MPxCommand):
     def doIt(self, args):
         argDb = om.MArgDatabase(self.syntax(), args)
 
-        cellSizeVal = 0.025
+        cellSizeVal = 0.05
         if argDb.isFlagSet(TerroderCommand.CELL_SIZE_FLAG):
             cellSizeVal = argDb.flagArgumentDouble(TerroderCommand.CELL_SIZE_FLAG, 0)
 
@@ -39,28 +39,49 @@ class TerroderCommand(om.MPxCommand):
         selectedMesh = TerroderCommand.nameToMesh(selectedObjNames[0])
 
         bb = cmds.exactWorldBoundingBox(selectedObjNames[0])
-        bbMin = bb[0:3]
-        bbMax = bb[3:6]
-        om.MGlobal.displayInfo(f"[DEBUG] selected object bounding box: {bbMin} to {bbMax}")
+        xMin = bb[0]
+        yMin = bb[1]
+        zMin = bb[2]
+        xMax = bb[3]
+        yMax = bb[4]
+        zMax = bb[5]
+        om.MGlobal.displayInfo(f"[DEBUG] selected object bounding box: {bb[0:3]} to {bb[3:6]}")
 
-        raycastY = bbMax[1] + 0.1  # 0.1 "slack distance"
-        xRange = bbMax[0] - bbMin[0]
-        yRange = bbMax[1] - bbMin[1]
-        zRange = bbMax[2] - bbMin[2]
-        gridShape = (int(math.ceil(xRange / cellSizeVal + 0.01)), int(math.ceil(zRange / cellSizeVal + 0.01)))
+        raycastY = yMax + 0.1  # 0.1 "slack distance"
+        if xMax - xMin <= 0.01:
+            om.MGlobal.displayError("Range of x values is too small.")
+            self.setResult("Did not execute command due to an error.")
+            return
+        if zMax - zMin <= 0.01:
+            om.MGlobal.displayError("Range of z values is too small.")
+            self.setResult("Did not execute command due to an error.")
+            return
+        
+        # Ensure (xMin, zMin) and (xMax, zMax) are within the bounding box
+        xMin += 0.001
+        zMin += 0.001
+        xMax -= 0.001
+        zMax -= 0.001
+        xRange = xMax - xMin
+        yRange = yMax - yMin
+        zRange = zMax - zMin
+
+        xCellDim = max(int(math.ceil(xRange / cellSizeVal + 0.01)), 2)
+        zCellDim = max(int(math.ceil(zRange / cellSizeVal + 0.01)), 2)
+        gridShape = (xCellDim + 1, zCellDim + 1)
 
         om.MGlobal.displayInfo(f"[DEBUG] grid shape: {gridShape}")
         uplift = np.zeros(gridShape)
-        # xStep = xRange / gridShape[0]
-        # zStep = zRange / gridShape[1]
 
         rayDirection = om.MFloatVector(0, -1, 0)
         # max distance is 0.2 + yRange since raycastY is only 0.1 above the bounding box
         raycastDistance = 0.2 + yRange
         for i in range(gridShape[0]):
-            x = bbMin[0] + xRange * (i + 0.5) / gridShape[0]
+            xFrac = float(i) / float(xCellDim)
+            x = xMin * (1 - xFrac) + xMax * xFrac
             for k in range(gridShape[1]):
-                z = bbMin[2] + zRange * (k + 0.5) / gridShape[1]
+                zFrac = float(k) / float(zCellDim) 
+                z = zMin * (1 - zFrac) + zMax * zFrac
                 rayOrigin = om.MFloatPoint(x, raycastY, z)
 
                 intersectionResult = selectedMesh.closestIntersection(rayOrigin, rayDirection, om.MSpace.kWorld, raycastDistance, False)
@@ -71,7 +92,41 @@ class TerroderCommand(om.MPxCommand):
         # Currently uplift is populated with y coordinates of a grid
         om.MGlobal.displayInfo(f"[DEBUG] uplift: {uplift}")
 
-        self.setResult("Executed command")
+        heightmap = self.runSimulation(uplift)
+        self.createOutputMesh(heightmap, cellSizeVal, xMin, zMin, xMax, zMax)
+
+        self.setResult("[DEBUG] Executed command")
+    
+    def runSimulation(self, uplift):
+        heightmap = np.copy(uplift) + np.random.random_sample(uplift.shape)
+        return heightmap
+    
+    def createOutputMesh(self, heightmap, cellSizeVal, xMin, zMin, xMax, zMax):
+        minHeight = np.min(heightmap) - 0.01
+        maxHeight = np.max(heightmap) + 0.01
+
+        outputPoints = np.empty((heightmap.shape[0], heightmap.shape[1], 3))
+        for i in range(heightmap.shape[0]):
+            xFrac = float(i) / float(heightmap.shape[0] - 1)
+            x = xMin * (1 - xFrac) + xMax * xFrac
+            for k in range(heightmap.shape[1]):
+                zFrac = float(k) / float(heightmap.shape[1] - 1)
+                z = zMin * (1 - zFrac) + zMax * zFrac
+
+                y = (heightmap[i][k] - minHeight) / (maxHeight - minHeight)
+                outputPoints[i][k][0] = x
+                outputPoints[i][k][1] = y
+                outputPoints[i][k][2] = z
+
+        mergeTolerance = cellSizeVal / 3.0
+        outputMesh = om.MFnMesh()
+        for i in range(outputPoints.shape[0] - 1):
+            for k in range(outputPoints.shape[1] - 1):
+                a = om.MPoint([outputPoints[i][k][d] for d in range(3)])
+                b = om.MPoint([outputPoints[i+1][k][d] for d in range(3)])
+                c = om.MPoint([outputPoints[i+1][k+1][d] for d in range(3)])
+                d = om.MPoint([outputPoints[i][k+1][d] for d in range(3)])
+                outputMesh.addPolygon([a, b, c, d], True, mergeTolerance)
     
     @staticmethod
     def nameToMesh(name):
@@ -79,7 +134,7 @@ class TerroderCommand(om.MPxCommand):
         selectionList = om.MSelectionList()
         selectionList.add(name)
 
-        om.MGlobal.displayInfo(f"Object '{name}' added to the selection list.")
+        om.MGlobal.displayInfo(f"[DEBUG] Object '{name}' added to the selection list.")
 
         dagPath = selectionList.getDagPath(0)
         if dagPath.hasFn(om.MFn.kMesh):
