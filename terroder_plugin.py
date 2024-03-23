@@ -59,16 +59,17 @@ class TerroderCommand(om.MPxCommand):
     def doIt(self, args):
         argDb = om.MArgDatabase(self.syntax(), args)
 
+        # Read arguments from flags
         if argDb.isFlagSet(TerroderCommand.CELL_SIZE_FLAG):
             self.cellSize = argDb.flagArgumentDouble(TerroderCommand.CELL_SIZE_FLAG, 0)
         if argDb.isFlagSet(TerroderCommand.NUM_ITERS_FLAG):
             self.numIters = argDb.flagArgumentInt(TerroderCommand.NUM_ITERS_FLAG, 0)
 
-        om.MGlobal.displayInfo(f"[DEBUG] cell size: {self.cellSize}")
+        om.MGlobal.displayInfo(f"[DEBUG] cell size: {self.cellSize}, numIters: {self.numIters}")
 
+        # We expect exactly one mesh to be selected; we will read uplift from it
         selectedObjNames = cmds.ls(selection = True)
         om.MGlobal.displayInfo(f"[DEBUG] selected object names: [{', '.join(selectedObjNames)}]")
-        
         if len(selectedObjNames) != 1:
             om.MGlobal.displayError("There must be exactly one object selected.")
             self.setResult("Did not execute command due to an error.")
@@ -76,35 +77,34 @@ class TerroderCommand(om.MPxCommand):
         
         selectedMesh = TerroderCommand.nameToMesh(selectedObjNames[0])
 
+        # Read x- and z- bounds from the bounding box of the Mesh
+        # TODO: if the input mesh doesn't include anything at a particular (x, z), neither should the output mesh
         bb = cmds.exactWorldBoundingBox(selectedObjNames[0])
         self.xMin, self.xMax = bb[0], bb[3]
         self.zMin, self.zMax = bb[2], bb[5]
         om.MGlobal.displayInfo(f"[DEBUG] selected object bounding box: {bb[0:3]} to {bb[3:6]}")
-
-        raycastY = bb[4] + 0.1  # 0.1 "slack distance"
-        if self.xRange <= 0.01:
-            om.MGlobal.displayError("Range of x values is too small.")
+        if self.xRange <= 0.01 or self.zRange <= 0.01:
+            om.MGlobal.displayError(f"(x, z) range ({self.xRange}, {self.zRange}) is too small in some dimension.")
             self.setResult("Did not execute command due to an error.")
             return
-        if self.zRange <= 0.01:
-            om.MGlobal.displayError("Range of z values is too small.")
-            self.setResult("Did not execute command due to an error.")
-            return
-        
-        # Ensure (xMin, zMin) and (xMax, zMax) are within the bounding box
+        # Ensures (xMin, zMin) and (xMax, zMax) are within the bounding box of the input mesh
         self.xMin += 0.001
         self.zMin += 0.001
         self.xMax -= 0.001
         self.zMax -= 0.001
 
+        # Set the grid size
         xCellDim = max(int(math.ceil(self.xRange / self.cellSize + 0.01)), 2)
         zCellDim = max(int(math.ceil(self.zRange / self.cellSize + 0.01)), 2)
         gridShape = (xCellDim + 1, zCellDim + 1)
-        self.xStep, self.zStep = self.xRange / xCellDim, self.zRange / zCellDim
-
         om.MGlobal.displayInfo(f"[DEBUG] grid shape: {gridShape}")
+        self.xStep, self.zStep = self.xRange / xCellDim, self.zRange / zCellDim
         self.upliftMap = np.zeros(gridShape)
 
+
+        # Begin raycasting from above the uplift mesh to read the y-value at xz lattice points
+
+        raycastY = bb[4] + 0.1  # 0.1 "slack distance"
         rayDirection = om.MFloatVector(0, -1, 0)
         # max distance is 0.2 + yRange since raycastY is only 0.1 above the bounding box
         raycastDistance = 0.2 + (bb[4] - bb[1])
@@ -113,19 +113,15 @@ class TerroderCommand(om.MPxCommand):
             for k in range(gridShape[1]):
                 z = self.interpolateZ(float(k) / float(zCellDim))
                 rayOrigin = om.MFloatPoint(x, raycastY, z)
-
                 intersectionResult = selectedMesh.closestIntersection(rayOrigin, rayDirection, om.MSpace.kWorld, raycastDistance, False)
                 if intersectionResult is not None:
                     hitPoint = intersectionResult[0]
                     self.upliftMap[i][k] = hitPoint.y
         
-        # Normalize uplift to the range -1 to 1
+        # Normalize upliftMap so that uplifts appear in the range -1 to 1
         minUplift = np.min(self.upliftMap) - 0.01
         maxUplift = np.max(self.upliftMap) + 0.01
         self.upliftMap = -1 + 2 * np.divide(np.subtract(self.upliftMap, minUplift), np.subtract(maxUplift, minUplift))
-        
-        # Currently uplift is populated with y coordinates of a grid
-        om.MGlobal.displayInfo(f"[DEBUG] uplift: {self.upliftMap}")
 
         self.runSimulation()
         self.createOutputMesh()
