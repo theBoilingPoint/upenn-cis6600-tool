@@ -18,15 +18,44 @@ class TerroderCommand(om.MPxCommand):
 
     def __init__(self):
         om.MPxCommand.__init__(self)
+        # control parameters; initialized to defaults
+        self.cellSize = 0.05
 
+        # variables used during the command execution
+        self.xMin = 0.0
+        self.xMax = 0.0
+        self.zMin = 0.0
+        self.zMax = 0.0
+        self.minUplift = 0.0
+        self.maxUplift = 0.0
+        self.uplift = None
+        self.heightmap = None
+    
+    @property
+    def xRange(self) -> float:
+        return self.xMax - self.xMin
+    
+    @property
+    def zRange(self) -> float:
+        return self.zMax - self.zMin
+    
+    @property
+    def upliftRange(self) -> float:
+        return self.maxUplift - self.minUplift
+    
+    def interpolateX(self, fraction: float) -> float:
+        return self.xMin * (1 - fraction) + self.xMax * fraction
+    
+    def interpolateZ(self, fraction: float) -> float:
+        return self.zMin * (1 - fraction) + self.zMax * fraction
+    
     def doIt(self, args):
         argDb = om.MArgDatabase(self.syntax(), args)
 
-        cellSizeVal = 0.05
         if argDb.isFlagSet(TerroderCommand.CELL_SIZE_FLAG):
-            cellSizeVal = argDb.flagArgumentDouble(TerroderCommand.CELL_SIZE_FLAG, 0)
+            self.cellSize = argDb.flagArgumentDouble(TerroderCommand.CELL_SIZE_FLAG, 0)
 
-        om.MGlobal.displayInfo(f"[DEBUG] grid size: {cellSizeVal}")
+        om.MGlobal.displayInfo(f"[DEBUG] cell size: {self.cellSize}")
 
         selectedObjNames = cmds.ls(selection = True)
         om.MGlobal.displayInfo(f"[DEBUG] selected object names: [{', '.join(selectedObjNames)}]")
@@ -39,86 +68,77 @@ class TerroderCommand(om.MPxCommand):
         selectedMesh = TerroderCommand.nameToMesh(selectedObjNames[0])
 
         bb = cmds.exactWorldBoundingBox(selectedObjNames[0])
-        xMin = bb[0]
-        yMin = bb[1]
-        zMin = bb[2]
-        xMax = bb[3]
-        yMax = bb[4]
-        zMax = bb[5]
+        self.xMin = bb[0]
+        self.xMax = bb[3]
+        self.zMin = bb[2]
+        self.zMax = bb[5]
+        self.minUplift = bb[1]
+        self.maxUplift = bb[4]
         om.MGlobal.displayInfo(f"[DEBUG] selected object bounding box: {bb[0:3]} to {bb[3:6]}")
 
-        raycastY = yMax + 0.1  # 0.1 "slack distance"
-        if xMax - xMin <= 0.01:
+        raycastY = self.maxUplift + 0.1  # 0.1 "slack distance"
+        if self.xRange <= 0.01:
             om.MGlobal.displayError("Range of x values is too small.")
             self.setResult("Did not execute command due to an error.")
             return
-        if zMax - zMin <= 0.01:
+        if self.zRange <= 0.01:
             om.MGlobal.displayError("Range of z values is too small.")
             self.setResult("Did not execute command due to an error.")
             return
         
         # Ensure (xMin, zMin) and (xMax, zMax) are within the bounding box
-        xMin += 0.001
-        zMin += 0.001
-        xMax -= 0.001
-        zMax -= 0.001
-        xRange = xMax - xMin
-        yRange = yMax - yMin
-        zRange = zMax - zMin
+        self.xMin += 0.001
+        self.zMin += 0.001
+        self.xMax -= 0.001
+        self.zMax -= 0.001
 
-        xCellDim = max(int(math.ceil(xRange / cellSizeVal + 0.01)), 2)
-        zCellDim = max(int(math.ceil(zRange / cellSizeVal + 0.01)), 2)
+        xCellDim = max(int(math.ceil(self.xRange / self.cellSize + 0.01)), 2)
+        zCellDim = max(int(math.ceil(self.zRange / self.cellSize + 0.01)), 2)
         gridShape = (xCellDim + 1, zCellDim + 1)
 
         om.MGlobal.displayInfo(f"[DEBUG] grid shape: {gridShape}")
-        uplift = np.zeros(gridShape)
+        self.uplift = np.zeros(gridShape)
 
         rayDirection = om.MFloatVector(0, -1, 0)
         # max distance is 0.2 + yRange since raycastY is only 0.1 above the bounding box
-        raycastDistance = 0.2 + yRange
+        raycastDistance = 0.2 + self.upliftRange
         for i in range(gridShape[0]):
-            xFrac = float(i) / float(xCellDim)
-            x = xMin * (1 - xFrac) + xMax * xFrac
+            x = self.interpolateX(float(i) / float(xCellDim))
             for k in range(gridShape[1]):
-                zFrac = float(k) / float(zCellDim) 
-                z = zMin * (1 - zFrac) + zMax * zFrac
+                z = self.interpolateZ(float(k) / float(zCellDim))
                 rayOrigin = om.MFloatPoint(x, raycastY, z)
 
                 intersectionResult = selectedMesh.closestIntersection(rayOrigin, rayDirection, om.MSpace.kWorld, raycastDistance, False)
                 if intersectionResult is not None:
                     hitPoint = intersectionResult[0]
-                    uplift[i][k] = hitPoint.y
+                    self.uplift[i][k] = hitPoint.y
         
         # Currently uplift is populated with y coordinates of a grid
-        om.MGlobal.displayInfo(f"[DEBUG] uplift: {uplift}")
+        om.MGlobal.displayInfo(f"[DEBUG] uplift: {self.uplift}")
 
-        heightmap = self.runSimulation(uplift)
-        self.createOutputMesh(heightmap, cellSizeVal, xMin, zMin, xMax, zMax)
+        self.runSimulation()
+        self.createOutputMesh()
 
         self.setResult("[DEBUG] Executed command")
     
-    def runSimulation(self, uplift):
-        heightmap = np.copy(uplift) + np.random.random_sample(uplift.shape)
-        return heightmap
+    def runSimulation(self):
+        self.heightmap = np.copy(self.uplift) + 0.5 * np.random.random_sample(self.uplift.shape)
     
-    def createOutputMesh(self, heightmap, cellSizeVal, xMin, zMin, xMax, zMax):
-        minHeight = np.min(heightmap) - 0.01
-        maxHeight = np.max(heightmap) + 0.01
+    def createOutputMesh(self):
+        minHeight = np.min(self.heightmap) - 0.01
+        maxHeight = np.max(self.heightmap) + 0.01
 
-        outputPoints = np.empty((heightmap.shape[0], heightmap.shape[1], 3))
-        for i in range(heightmap.shape[0]):
-            xFrac = float(i) / float(heightmap.shape[0] - 1)
-            x = xMin * (1 - xFrac) + xMax * xFrac
-            for k in range(heightmap.shape[1]):
-                zFrac = float(k) / float(heightmap.shape[1] - 1)
-                z = zMin * (1 - zFrac) + zMax * zFrac
-
-                y = (heightmap[i][k] - minHeight) / (maxHeight - minHeight)
+        outputPoints = np.empty((self.heightmap.shape[0], self.heightmap.shape[1], 3))
+        for i in range(self.heightmap.shape[0]):
+            x = self.interpolateX(float(i) / float(self.heightmap.shape[0] - 1))
+            for k in range(self.heightmap.shape[1]):
+                z = self.interpolateZ(float(k) / float(self.heightmap.shape[1] - 1))
+                y = (self.heightmap[i][k] - minHeight) / (maxHeight - minHeight)
                 outputPoints[i][k][0] = x
                 outputPoints[i][k][1] = y
                 outputPoints[i][k][2] = z
 
-        mergeTolerance = cellSizeVal / 3.0
+        mergeTolerance = self.cellSize / 2.1
         outputMesh = om.MFnMesh()
         for i in range(outputPoints.shape[0] - 1):
             for k in range(outputPoints.shape[1] - 1):
