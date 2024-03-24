@@ -122,6 +122,7 @@ class TerroderCommand(om.MPxCommand):
         minUplift = np.min(self.upliftMap) - 0.01
         maxUplift = np.max(self.upliftMap) + 0.01
         self.upliftMap = -1 + 2 * np.divide(np.subtract(self.upliftMap, minUplift), np.subtract(maxUplift, minUplift))
+        self.displayInfo(f"[DEBUG] uplift: {self.upliftMap}")
 
         self.runSimulation()
         self.createOutputMesh()
