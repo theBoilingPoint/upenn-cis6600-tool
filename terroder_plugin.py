@@ -160,7 +160,7 @@ class TerroderCommand(om.MPxCommand):
                 for d in range(8):
                     di, dk = TerroderCommand.NEIGHBOR_ORDER[d]
                     ni, nk = i + di, k + dk
-                    if not self.cellinBounds(ni, nk):
+                    if not self.cellInBounds(ni, nk):
                         continue
 
                     neighborSlope = (self.heightMap[i][k] - self.heightMap[ni][nk]) / TerroderCommand.NEIGHBOR_DIST[d]
@@ -170,7 +170,7 @@ class TerroderCommand(om.MPxCommand):
                 if steepestLowerNeighbor[i][k] < 0:
                     continue
 
-                di, dk = TerroderCommand.NEIGHBOR_DIST[steepestLowerNeighbor[i][k]]
+                di, dk = TerroderCommand.NEIGHBOR_ORDER[steepestLowerNeighbor[i][k]]
                 newDrainArea[i+di][k+dk] += self.drainAreaEstimate[i][k]
                         
                         # add water to neighbor if possible
@@ -185,7 +185,7 @@ class TerroderCommand(om.MPxCommand):
                 if steepestLowerNeighbor[i][k] < 0:
                     continue
 
-                erosionAmount = self.erosion[i][k] * self.erosionScale
+                erosionAmount = erosion[i][k] * self.erosionScale
                 di, dk = TerroderCommand.NEIGHBOR_ORDER[steepestLowerNeighbor[i][k]]
                 ni, nk = i + di, k + dk
                 self.heightMap[i][k] -= erosionAmount
