@@ -19,6 +19,7 @@ class TerroderCommand(om.MPxCommand):
     NUM_ITERS_LONG_FLAG = "-iterations"
     SQRT_2 = math.sqrt(2)
     NEIGHBOR_ORDER = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
+    NEIGHBOR_DIST = [SQRT_2, 1, SQRT_2, 1, 1, SQRT_2, 1, SQRT_2]
     SLOPE_NORM_EXPONENT = 4.0
     STEEPEST_SLOPE_EXPONENT = 1.0
     DRAIN_AREA_EXPONENT = 0.5
@@ -28,6 +29,9 @@ class TerroderCommand(om.MPxCommand):
         # control parameters; initialized to defaults
         self.cellSize = 0.05
         self.numIters = 5
+        self.upliftScale = 1.0
+        self.erosionScale = 1.0
+        # TODO: laplacianScale (and actually use the laplacian)
 
         # variables used during the command execution
         self.xMin = 0.0
@@ -36,8 +40,10 @@ class TerroderCommand(om.MPxCommand):
         self.zMax = 0.0
         self.xStep = 0.0
         self.zStep = 0.0
+        self.gridShape = None
         self.upliftMap = None
         self.heightMap = None
+        self.drainAreaEstimate = None
     
     @property
     def xRange(self) -> float:
@@ -96,10 +102,10 @@ class TerroderCommand(om.MPxCommand):
         # Set the grid size
         xCellDim = max(int(math.ceil(self.xRange / self.cellSize + 0.01)), 2)
         zCellDim = max(int(math.ceil(self.zRange / self.cellSize + 0.01)), 2)
-        gridShape = (xCellDim + 1, zCellDim + 1)
-        om.MGlobal.displayInfo(f"[DEBUG] grid shape: {gridShape}")
+        self.gridShape = (xCellDim + 1, zCellDim + 1)
+        om.MGlobal.displayInfo(f"[DEBUG] grid shape: {self.gridShape}")
         self.xStep, self.zStep = self.xRange / xCellDim, self.zRange / zCellDim
-        self.upliftMap = np.zeros(gridShape)
+        self.upliftMap = np.zeros(self.gridShape)
 
 
         # Begin raycasting from above the uplift mesh to read the y-value at xz lattice points
@@ -108,9 +114,9 @@ class TerroderCommand(om.MPxCommand):
         rayDirection = om.MFloatVector(0, -1, 0)
         # max distance is 0.2 + yRange since raycastY is only 0.1 above the bounding box
         raycastDistance = 0.2 + (bb[4] - bb[1])
-        for i in range(gridShape[0]):
+        for i in range(self.gridShape[0]):
             x = self.interpolateX(float(i) / float(xCellDim))
-            for k in range(gridShape[1]):
+            for k in range(self.gridShape[1]):
                 z = self.interpolateZ(float(k) / float(zCellDim))
                 rayOrigin = om.MFloatPoint(x, raycastY, z)
                 intersectionResult = selectedMesh.closestIntersection(rayOrigin, rayDirection, om.MSpace.kWorld, raycastDistance, False)
@@ -118,10 +124,8 @@ class TerroderCommand(om.MPxCommand):
                     hitPoint = intersectionResult[0]
                     self.upliftMap[i][k] = hitPoint.y
         
-        # Normalize upliftMap so that uplifts appear in the range -1 to 1
-        minUplift = np.min(self.upliftMap) - 0.01
-        maxUplift = np.max(self.upliftMap) + 0.01
-        self.upliftMap = -1 + 2 * np.divide(np.subtract(self.upliftMap, minUplift), np.subtract(maxUplift, minUplift))
+        # Normalize upliftMap to have zero mean; do not affect scale
+        self.upliftMap -= np.mean(self.upliftMap)
         self.displayInfo(f"[DEBUG] uplift: {self.upliftMap}")
 
         self.runSimulation()
@@ -133,58 +137,70 @@ class TerroderCommand(om.MPxCommand):
         if self.upliftMap is None:
             raise RuntimeError("The uplift map hasn't been created.")
         self.heightMap = np.random.random_sample(self.upliftMap.shape)
+        self.drainAreaEstimate = np.ones(self.upliftMap.shape)
         for _ in range(self.numIters):
             self.runIteration()
     
     def runIteration(self):
-        gridShape = self.heightMap.shape
         averageHeight = np.average(self.heightMap)
+        
+        # Approximate (relative) drainage Area
+        # Compute newDrainArea and steepestSlope
+        # newDrainArea is just computed by having each cell dump its area to its steepest lower neighbor
+        newDrainArea = np.ones(self.gridShape)
+        steepestSlope = np.zeros(self.gridShape)
+        steepestLowerNeighbor = np.full(self.gridShape, -1, dtype=np.int64)
+        for i in range(self.gridShape[0]):
+            for k in range(self.gridShape[1]):
+                totalDrainAmount = 0
+                # Receive drain area from steepest uphill neighbor
+                
+                steepestNeighbor = None
 
-        # drainProportion[i][k][d] is the proportion of water at (i, k) that flows in the direction NEIGHBOR_ORDER[d]
-        drainProportion = np.zeros((gridShape[0], gridShape[1], 8))
-        steepestSlope = np.zeros(gridShape)  # 0 means this is a pit
-        for i in range(gridShape[0]):
-            for k in range(gridShape[1]):
-                height = self.heightMap[i][k]
                 for d in range(8):
                     di, dk = TerroderCommand.NEIGHBOR_ORDER[d]
                     ni, nk = i + di, k + dk
-                    neighborHeight = self.heightMap[ni][nk] if self.cellInBounds(ni, nk) else averageHeight
-                    if neighborHeight < height:
-                        dist = math.sqrt(math.pow(di * self.xStep, 2) + math.pow(dk * self.zStep, 2))
-                        slope = (height - neighborHeight) / dist
-                        steepestSlope[i][k] = max(slope, steepestSlope[i][k])
-                        drainProportion[i][k][d] = math.pow(slope, TerroderCommand.SLOPE_NORM_EXPONENT)
-                s = np.sum(drainProportion[i][k][:])
-                if s > 0:
-                    drainProportion[i][k][:] /= s
-        
-        # Approximate (relative) drainage Area
-        drainArea = np.ones(gridShape)
-        for t in range(10):
-            waterDelta = np.ones(gridShape)
-            for i in range(gridShape[0]):
-                for k in range(gridShape[1]):
-                    totalDrainAmount = 0
-                    for d in range(drainProportion.shape[2]):
-                        if drainProportion[i][k][d] <= 0.0:
-                            continue
+                    if not self.cellinBounds(ni, nk):
+                        continue
 
-                        drainAmount = drainProportion[i][k][d] * drainArea[i][k]
-                        waterDelta[i][k] -= drainAmount
+                    neighborSlope = (self.heightMap[i][k] - self.heightMap[ni][nk]) / TerroderCommand.NEIGHBOR_DIST[d]
+                    if neighborSlope > steepestSlope[i][k]:
+                        steepestLowerNeighbor[i][k] = d
+                        steepestSlope[i][k] = neighborSlope
+                if steepestLowerNeighbor[i][k] < 0:
+                    continue
+
+                di, dk = TerroderCommand.NEIGHBOR_DIST[steepestLowerNeighbor[i][k]]
+                newDrainArea[i+di][k+dk] += self.drainAreaEstimate[i][k]
                         
                         # add water to neighbor if possible
-                        di, dk = TerroderCommand.NEIGHBOR_ORDER[d]
-                        ni, nk = i + di, k + dk
-                        if self.cellInBounds(ni, nk):
-                            waterDelta[ni][nk] += drainAmount
-            drainArea += waterDelta
-        drainArea = np.clip(drainArea, 0, None)
-        
-        slopeTerm = np.power(steepestSlope, TerroderCommand.STEEPEST_SLOPE_EXPONENT)
-        drainAreaTerm = np.power(drainArea, TerroderCommand.DRAIN_AREA_EXPONENT)
-        self.heightMap += self.upliftMap - np.multiply(slopeTerm, drainAreaTerm)
-        
+        self.drainAreaEstimate = newDrainArea / np.mean(newDrainArea)
+        erosion = np.power(steepestSlope, TerroderCommand.STEEPEST_SLOPE_EXPONENT) * np.power(self.drainAreaEstimate, TerroderCommand.DRAIN_AREA_EXPONENT)
+        # Normalize so avg erosion is 1
+        erosion /= np.mean(erosion)
+
+        # Perform erosion; move to steepest lower neighbor
+        for i in range(self.gridShape[0]):
+            for k in range(self.gridShape[1]):
+                if steepestLowerNeighbor[i][k] < 0:
+                    continue
+
+                erosionAmount = self.erosion[i][k] * self.erosionScale
+                di, dk = TerroderCommand.NEIGHBOR_ORDER[steepestLowerNeighbor[i][k]]
+                ni, nk = i + di, k + dk
+                self.heightMap[i][k] -= erosionAmount
+                self.heightMap[ni][nk] += erosionAmount
+
+        upliftTerm = self.upliftScale * self.upliftMap
+        self.heightMap += upliftTerm
+    
+    # ROUGHLY from https://stackoverflow.com/a/76686523
+    # TODO: inspect for correctness
+    def computeHeightMapLaplacian(self):
+        grad_x, grad_z = np.gradient(self.heightMap, self.xStep, self.zStep)
+        grad_xx = np.gradient(grad_x, self.xStep, axis=0)
+        grad_zz = np.gradient(grad_z, self.zStep, axis=1)
+        return grad_xx + grad_zz    
 
     def createOutputMesh(self):
         if self.heightMap is None:
