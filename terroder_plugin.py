@@ -29,8 +29,8 @@ class TerroderCommand(om.MPxCommand):
         # control parameters; initialized to defaults
         self.cellSize = 0.05
         self.numIters = 5
-        self.upliftScale = 1.0
-        self.erosionScale = 1.0
+        self.upliftScale = 0.01
+        self.erosionScale = 0.1
         # TODO: laplacianScale (and actually use the laplacian)
 
         # variables used during the command execution
@@ -126,7 +126,6 @@ class TerroderCommand(om.MPxCommand):
         
         # Normalize upliftMap to have zero mean; do not affect scale
         self.upliftMap -= np.mean(self.upliftMap)
-        self.displayInfo(f"[DEBUG] uplift: {self.upliftMap}")
 
         self.runSimulation()
         self.createOutputMesh()
