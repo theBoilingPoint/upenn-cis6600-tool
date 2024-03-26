@@ -17,12 +17,15 @@ class TerroderCommand(om.MPxCommand):
     CELL_SIZE_LONG_FLAG = "-cellSize"
     NUM_ITERS_FLAG = "-i"
     NUM_ITERS_LONG_FLAG = "-iterations"
-    SQRT_2 = math.sqrt(2)
+    UPLIFT_SCALE_FLAG = "-us"
+    UPLIFT_SCALE_LONG_FLAG = "-upliftScale"
+    EROSION_SCALE_FLAG = "-es"
+    EROSION_SCALE_LONG_FLAG = "-erosionScale"
+
     NEIGHBOR_ORDER = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
-    NEIGHBOR_DIST = [SQRT_2, 1, SQRT_2, 1, 1, SQRT_2, 1, SQRT_2]
     SLOPE_NORM_EXPONENT = 4.0
-    STEEPEST_SLOPE_EXPONENT = 1.0
-    DRAIN_AREA_EXPONENT = 0.5
+    STEEPEST_SLOPE_EXPONENT = 2.0
+    DRAIN_AREA_EXPONENT = 1.0
 
     def __init__(self):
         om.MPxCommand.__init__(self)
@@ -44,6 +47,7 @@ class TerroderCommand(om.MPxCommand):
         self.upliftMap = None
         self.heightMap = None
         self.drainAreaEstimate = None
+        self.numIterationsRun = 0
     
     @property
     def xRange(self) -> float:
@@ -70,6 +74,10 @@ class TerroderCommand(om.MPxCommand):
             self.cellSize = argDb.flagArgumentDouble(TerroderCommand.CELL_SIZE_FLAG, 0)
         if argDb.isFlagSet(TerroderCommand.NUM_ITERS_FLAG):
             self.numIters = argDb.flagArgumentInt(TerroderCommand.NUM_ITERS_FLAG, 0)
+        if argDb.isFlagSet(TerroderCommand.UPLIFT_SCALE_FLAG):
+            self.upliftScale = argDb.flagArgumentDouble(TerroderCommand.UPLIFT_SCALE_FLAG, 0)
+        if argDb.isFlagSet(TerroderCommand.EROSION_SCALE_FLAG):
+            self.erosionScale = argDb.flagArgumentDouble(TerroderCommand.EROSION_SCALE_FLAG, 0)
 
         om.MGlobal.displayInfo(f"[DEBUG] cell size: {self.cellSize}, numIters: {self.numIters}")
 
@@ -135,48 +143,70 @@ class TerroderCommand(om.MPxCommand):
     def runSimulation(self):
         if self.upliftMap is None:
             raise RuntimeError("The uplift map hasn't been created.")
-        self.heightMap = np.random.random_sample(self.upliftMap.shape)
+        self.createInitialHeightMap()
         self.drainAreaEstimate = np.ones(self.upliftMap.shape)
         for _ in range(self.numIters):
             self.runIteration()
     
+    def createInitialHeightMap(self):
+        heightMap = 0.25 + 0.5 * np.random.random_sample(self.gridShape)
+        # blur
+        axisKernel = np.array([0.25, 0.5, 0.25])
+        heightMap = np.apply_along_axis(lambda a: np.convolve(a, axisKernel, "same"), 0, heightMap)
+        heightMap = np.apply_along_axis(lambda a: np.convolve(a, axisKernel, "same"), 1, heightMap)
+        self.heightMap = heightMap
+
     def runIteration(self):
         averageHeight = np.average(self.heightMap)
-        
-        # Approximate (relative) drainage Area
-        # Compute newDrainArea and steepestSlope
-        # newDrainArea is just computed by having each cell dump its area to its steepest lower neighbor
-        newDrainArea = np.ones(self.gridShape)
-        steepestSlope = np.zeros(self.gridShape)
-        steepestLowerNeighbor = np.full(self.gridShape, -1, dtype=np.int64)
+
+        # Compute steepest lower neighbor and the slope to that neighbor
+        steepestLowerNeighbor = np.full(self.gridShape, -1, dtype=np.int64)  # -1 if no lower neighbor
+        steepestSlope = np.zeros(self.gridShape)  # 0 if no lower neighbor
         for i in range(self.gridShape[0]):
             for k in range(self.gridShape[1]):
-                totalDrainAmount = 0
-                # Receive drain area from steepest uphill neighbor
-                
-                steepestNeighbor = None
+                height = self.heightMap[i][k]
 
-                for d in range(8):
-                    di, dk = TerroderCommand.NEIGHBOR_ORDER[d]
+                for dirIdx in range(8):
+                    di, dk = TerroderCommand.NEIGHBOR_ORDER[dirIdx]
+                    ni, nk = i + di, k + dk
+                    if not self.cellInBounds(ni, nk):
+                        continue
+                    
+                    neighborHeight = self.heightMap[ni][nk]
+                    if neighborHeight >= height:
+                        continue
+
+                    xDist = di * self.xStep
+                    zDist = dk * self.zStep
+                    neighborDist = np.sqrt(xDist * xDist + zDist * zDist)
+                    slope = (height - neighborHeight) / neighborDist
+                    if slope > steepestSlope[i][k]:
+                        steepestLowerNeighbor[i][k] = dirIdx
+                        steepestSlope[i][k] = slope
+
+
+        # Estimate (relative) drainage Area
+        # newDrainArea is just computed by having each cell dump its current drainage area estimate to its steepest lower neighbor
+        # Perform this operation more times the first few iterations so it converges a little more quickly
+        for _ in range(max(1, 5 - 2 * self.numIterationsRun)):
+            newDrainAreaEstimate = np.ones(self.gridShape)
+            for i in range(self.gridShape[0]):
+                for k in range(self.gridShape[1]):
+                    dirIdx = steepestLowerNeighbor[i][k]
+                    if dirIdx < 0:
+                        continue
+
+                    di, dk = TerroderCommand.NEIGHBOR_ORDER[dirIdx]
                     ni, nk = i + di, k + dk
                     if not self.cellInBounds(ni, nk):
                         continue
 
-                    neighborSlope = (self.heightMap[i][k] - self.heightMap[ni][nk]) / TerroderCommand.NEIGHBOR_DIST[d]
-                    if neighborSlope > steepestSlope[i][k]:
-                        steepestLowerNeighbor[i][k] = d
-                        steepestSlope[i][k] = neighborSlope
-                if steepestLowerNeighbor[i][k] < 0:
-                    continue
+                    newDrainAreaEstimate[ni][nk] += self.drainAreaEstimate[i][k]
+            
+            self.drainAreaEstimate = newDrainAreaEstimate
 
-                di, dk = TerroderCommand.NEIGHBOR_ORDER[steepestLowerNeighbor[i][k]]
-                newDrainArea[i+di][k+dk] += self.drainAreaEstimate[i][k]
-                        
-                        # add water to neighbor if possible
-        self.drainAreaEstimate = newDrainArea / np.mean(newDrainArea)
+        # Equals 1 at steepest slope 1 and drain area 1
         erosion = np.power(steepestSlope, TerroderCommand.STEEPEST_SLOPE_EXPONENT) * np.power(self.drainAreaEstimate, TerroderCommand.DRAIN_AREA_EXPONENT)
-        # Normalize so avg erosion is 1
-        erosion /= np.mean(erosion)
 
         # Perform erosion; move to steepest lower neighbor
         for i in range(self.gridShape[0]):
@@ -192,6 +222,8 @@ class TerroderCommand(om.MPxCommand):
 
         upliftTerm = self.upliftScale * self.upliftMap
         self.heightMap += upliftTerm
+
+        self.numIterationsRun += 1
     
     # ROUGHLY from https://stackoverflow.com/a/76686523
     # TODO: inspect for correctness
@@ -255,6 +287,8 @@ class TerroderCommand(om.MPxCommand):
         syntax = om.MSyntax()
         syntax.addFlag(TerroderCommand.CELL_SIZE_FLAG, TerroderCommand.CELL_SIZE_LONG_FLAG, om.MSyntax.kDouble)
         syntax.addFlag(TerroderCommand.NUM_ITERS_FLAG, TerroderCommand.NUM_ITERS_LONG_FLAG, om.MSyntax.kLong)
+        syntax.addFlag(TerroderCommand.UPLIFT_SCALE_FLAG, TerroderCommand.UPLIFT_SCALE_LONG_FLAG, om.MSyntax.kDouble)
+        syntax.addFlag(TerroderCommand.EROSION_SCALE_FLAG, TerroderCommand.EROSION_SCALE_LONG_FLAG, om.MSyntax.kDouble)
         return syntax
     
     @staticmethod
