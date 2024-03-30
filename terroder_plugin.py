@@ -12,6 +12,7 @@ import math;
 # The name of the command. 
 
 class TerroderCommand(om.MPxCommand):
+    MENU_NAME = "Terroder"
     NAME = "terroder"
     CELL_SIZE_FLAG = "-cs"
     CELL_SIZE_LONG_FLAG = "-cellSize"
@@ -212,39 +213,34 @@ class TerroderCommand(om.MPxCommand):
     
     # populates self.drainageArea
     def makeDrainageAreaMap(self) -> np.ndarray:
+         # sort by descending height
         cellHeights = []
         for i in range(self.gridShape[0]):
-            for k in range(self.gridShape[0]):
+            for k in range(self.gridShape[1]):
                 cellHeights.append((i, k, self.heightMap[i][k]))
-        cellHeights.sort(key = lambda ch: -ch[2])  # sort by descending height
+        cellHeights.sort(key = lambda ch: -ch[2]) 
 
-        globalMaxDiff = 0
         drainageArea = np.ones(self.gridShape)
         for i, k, h in cellHeights:
             neighborCells = self.getNeighborCells((i, k))
-            relFlow = {}
+            relFlows = {}
+            totalRelFlow = 0.0
             for ni, nk in neighborCells:
                 nh = self.heightMap[ni][nk]
                 if nh >= h:
                     continue
                 
                 di, dk = ni - i, nk - k
-                relSlope = (h - nh) / math.sqrt(di * di + dk * dk) # only need to compute proportionally due to normalization later
-                relFlow[(ni, nk)] = pow(relSlope, 4)
-                globalMaxDiff = max(globalMaxDiff, h - nh)
-            
-            if len(relFlow) == 0:
+                relFlow = pow((h - nh) / math.sqrt(di * di + dk * dk), 4) # only need to compute proportionally due to normalization later
+                relFlows[(ni, nk)] = relFlow
+                totalRelFlow += 1
+
+            if len(relFlows) == 0 or totalRelFlow < 0.001:
                 continue
 
-            totalRelFlow = sum(relFlow.values())
-            if totalRelFlow < 0.001:
-                continue
-            for ni, nk in relFlow:
-                flowFraction = relFlow[(ni, nk)] / totalRelFlow
-                drainageArea[ni][nk] += drainageArea[i][k] * flowFraction
+            for ni, nk in relFlows:
+                drainageArea[ni][nk] += drainageArea[i][k] * relFlows[(ni, nk)] / totalRelFlow
 
-        if self.numIterationsRun % 10 == 9:
-            om.MGlobal.displayInfo(f"[DEBUG] iteration {self.numIterationsRun}, xstep: {self.xStep}, avg drainage area: {np.mean(drainageArea)}, max diff: {globalMaxDiff}")
         return drainageArea
     
     # ROUGHLY from https://stackoverflow.com/a/76686523
@@ -258,7 +254,6 @@ class TerroderCommand(om.MPxCommand):
     def createOutputMesh(self):
         if self.heightMap is None:
             raise RuntimeError("The height map hasn't been created.")
-        
 
         # outputPoints will have the (x, y, z) point for each cell in self.heightMap
         outputPoints = np.empty((self.heightMap.shape[0], self.heightMap.shape[1], 3))
@@ -321,8 +316,17 @@ def initializePlugin(plugin):
     pluginFn = om.MFnPlugin(plugin)
         # Must register syntaxCreator as well
     pluginFn.registerCommand(TerroderCommand.NAME, TerroderCommand.createCommand, TerroderCommand.createSyntax)
+    createMenu()
 
 # Uninitialize the plugin
 def uninitializePlugin(plugin):
+    deleteMenu()
     mplugin = om.MFnPlugin(plugin)
     mplugin.deregisterCommand(TerroderCommand.NAME)
+
+
+def createMenu():
+    cmds.menu(TerroderCommand.MENU_NAME, l='Terroder', p='$gMainWindow')
+
+def deleteMenu():
+    cmds.deleteUI(TerroderCommand.MENU_NAME)
