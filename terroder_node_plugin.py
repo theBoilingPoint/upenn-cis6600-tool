@@ -1,6 +1,9 @@
-import sys
+import os
+
 import maya.api.OpenMaya as om
 import maya.cmds as cmds;
+import maya.mel as mm
+
 import numpy as np;
 
 # USE PYTHON API 2.0
@@ -36,8 +39,6 @@ class TerroderNode(om.MPxNode):
     output_mesh = om.MObject()
 
     # constants
-    MENU_NAME = "Terroder"
-
     NEIGHBOR_ORDER = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
     # SLOPE_NORM_EXPONENT = 4.0
     STEEPEST_SLOPE_EXPONENT = 2.0
@@ -356,9 +357,19 @@ def initializePlugin(mobject):
     # Don't use try except bc otherwise the error message won't be printed
     mplugin.registerNode(kPluginNodeTypeName, nodeId, nodeCreator, nodeInitializer, om.MPxNode.kDependNode)
 
+    melPath = f"{mplugin.loadPath()}/TerroderMenu.mel"
+    if os.path.exists(melPath):
+        mm.eval(f"source \"{melPath}\";")
+        print(f"Loaded the script {melPath}.")
+    else:
+        print(f"Could not find the script in {melPath}.")
 
 # uninitialize the script plug-in
 def uninitializePlugin(mobject):
     mplugin = om.MFnPlugin(mobject)
     # Don't use try except bc otherwise the error message won't be printed
     mplugin.deregisterNode( nodeId )
+
+    # Make sure menuName matches what written in TerroderMenu.mel
+    menuName = "TerroderMenu"
+    mm.eval(f"deleteUI ${menuName};")
