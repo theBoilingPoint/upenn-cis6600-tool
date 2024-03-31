@@ -349,7 +349,7 @@ def nodeInitializer():
 
 # creator
 def nodeCreator():
-    return om.asMPxPtr( TerroderNode() )
+    return TerroderNode()
 
 # initialize the script plug-in
 def initializePlugin(mobject):
