@@ -1,37 +1,39 @@
 import sys
-import maya.api.OpenMaya as OpenMaya
-import maya.OpenMayaMPx as OpenMayaMPx
+import maya.api.OpenMaya as om
 import maya.cmds as cmds;
 import numpy as np;
 
+# USE PYTHON API 2.0
+maya_useNewAPI = True
+
 # Useful functions for declaring attributes as inputs or outputs.
 def MAKE_INPUT(attr):
-    attr.setKeyable(True)
-    attr.setStorable(True)
-    attr.setReadable(True)
-    attr.setWritable(True)
+    attr.keyable = True
+    attr.storable = True
+    attr.readable = True
+    attr.writable = True
     
 def MAKE_OUTPUT(attr):
-    attr.setKeyable(False)
-    attr.setStorable(False)
-    attr.setReadable(True)
-    attr.setWritable(False)
+    attr.keyable = False
+    attr.storable = False
+    attr.readable = True
+    attr.writable = False
 
 # Define the name of the node
 kPluginNodeTypeName = "terroder"
 
 # Give the node a unique ID. Make sure this ID is different from all of your
 # other nodes!
-nodeId = OpenMaya.MTypeId(0x8888)
+nodeId = om.MTypeId(0x8888)
 
-class TerroderNode(OpenMayaMPx.MPxNode):
+class TerroderNode(om.MPxNode):
     # Declare class variables:
     # input
-    iterations = OpenMaya.MObject()
-    cellSize = OpenMaya.MObject()
+    iterations = om.MObject()
+    cellSize = om.MObject()
 
     # output
-    output_mesh = OpenMaya.MObject()
+    output_mesh = om.MObject()
 
     # constants
     MENU_NAME = "Terroder"
@@ -42,7 +44,7 @@ class TerroderNode(OpenMayaMPx.MPxNode):
     DRAIN_AREA_EXPONENT = 1.0
 
     def __init__(self):
-        OpenMayaMPx.MPxNode.__init__(self)
+        om.MPxNode.__init__(self)
 
         # control parameters; initialized to defaults
         self.cellSize = 0.2
@@ -112,15 +114,15 @@ class TerroderNode(OpenMayaMPx.MPxNode):
     @staticmethod
     def nameToMesh(name):
         selectedMesh = None
-        selectionList = OpenMaya.MSelectionList()
+        selectionList = om.MSelectionList()
         selectionList.add(name)
 
-        OpenMaya.MGlobal.displayInfo(f"[DEBUG] Object '{name}' added to the selection list.")
+        om.MGlobal.displayInfo(f"[DEBUG] Object '{name}' added to the selection list.")
 
         dagPath = selectionList.getDagPath(0)
-        if dagPath.hasFn(OpenMaya.MFn.kMesh):
+        if dagPath.hasFn(om.MFn.kMesh):
             # Initialize the MFnMesh function set with the dagPath
-            selectedMesh = OpenMaya.MFnMesh(dagPath)
+            selectedMesh = om.MFnMesh(dagPath)
         else:
             raise TypeError(f"Object '{name}' is not a mesh.")
 
@@ -218,13 +220,13 @@ class TerroderNode(OpenMayaMPx.MPxNode):
                 outputPoints[i][k][2] = z
 
         mergeTolerance = self.cellSize / 2.1
-        outputMesh = OpenMaya.MFnMesh()
+        outputMesh = om.MFnMesh()
         for i in range(outputPoints.shape[0] - 1):
             for k in range(outputPoints.shape[1] - 1):
-                a = OpenMaya.MPoint([outputPoints[i][k][d] for d in range(3)])
-                b = OpenMaya.MPoint([outputPoints[i+1][k][d] for d in range(3)])
-                c = OpenMaya.MPoint([outputPoints[i+1][k+1][d] for d in range(3)])
-                d = OpenMaya.MPoint([outputPoints[i][k+1][d] for d in range(3)])
+                a = om.MPoint([outputPoints[i][k][d] for d in range(3)])
+                b = om.MPoint([outputPoints[i+1][k][d] for d in range(3)])
+                c = om.MPoint([outputPoints[i+1][k+1][d] for d in range(3)])
+                d = om.MPoint([outputPoints[i][k+1][d] for d in range(3)])
                 outputMesh.addPolygon([a, b, c, d], True, mergeTolerance)
         
         return outputMesh
@@ -242,16 +244,16 @@ class TerroderNode(OpenMayaMPx.MPxNode):
         self.numIters = dataBlock.inputValue(TerroderNode.iterations).asInt()
         self.cellSize = dataBlock.inputValue(TerroderNode.cellSize).asFloat()
         
-        OpenMaya.MGlobal.displayInfo(f"[DEBUG] cell size: {self.cellSize}, numIters: {self.numIters}")
+        om.MGlobal.displayInfo(f"[DEBUG] cell size: {self.cellSize}, numIters: {self.numIters}")
 
         # Set the output data
         outputMeshData = dataBlock.outputValue(TerroderNode.output_mesh)
 
         # We expect exactly one mesh to be selected; we will read uplift from it
         selectedObjNames = cmds.ls(selection = True)
-        OpenMaya.MGlobal.displayInfo(f"[DEBUG] selected object names: [{', '.join(selectedObjNames)}]")
+        om.MGlobal.displayInfo(f"[DEBUG] selected object names: [{', '.join(selectedObjNames)}]")
         if len(selectedObjNames) != 1:
-            OpenMaya.MGlobal.displayError("There must be exactly one object selected.")
+            om.MGlobal.displayError("There must be exactly one object selected.")
             # Node doesn't have a setResult method
             # self.setResult("Did not execute command due to an error.")
             return
@@ -279,7 +281,7 @@ class TerroderNode(OpenMayaMPx.MPxNode):
         xCellDim = max(int(np.ceil(self.xRange / self.cellSize + 0.01)), 2)
         zCellDim = max(int(np.ceil(self.zRange / self.cellSize + 0.01)), 2)
         self.gridShape = (xCellDim + 1, zCellDim + 1)
-        OpenMaya.MGlobal.displayInfo(f"[DEBUG] grid shape: {self.gridShape}")
+        om.MGlobal.displayInfo(f"[DEBUG] grid shape: {self.gridShape}")
         self.xStep, self.zStep = self.xRange / xCellDim, self.zRange / zCellDim
 
         upliftInput = np.zeros(self.gridShape)
@@ -287,15 +289,15 @@ class TerroderNode(OpenMayaMPx.MPxNode):
 
         # Begin raycasting from above the uplift mesh to read the y-value at xz lattice points
         raycastY = bb[4] + 0.1  # 0.1 "slack distance"
-        rayDirection = OpenMaya.MFloatVector(0, -1, 0)
+        rayDirection = om.MFloatVector(0, -1, 0)
         # max distance is 0.2 + yRange since raycastY is only 0.1 above the bounding box
         raycastDistance = 0.2 + (bb[4] - bb[1])
         for i in range(self.gridShape[0]):
             x = self.interpolateX(float(i) / float(xCellDim))
             for k in range(self.gridShape[1]):
                 z = self.interpolateZ(float(k) / float(zCellDim))
-                rayOrigin = OpenMaya.MFloatPoint(x, raycastY, z)
-                intersectionResult = selectedMesh.closestIntersection(rayOrigin, rayDirection, OpenMaya.MSpace.kWorld, raycastDistance, False)
+                rayOrigin = om.MFloatPoint(x, raycastY, z)
+                intersectionResult = selectedMesh.closestIntersection(rayOrigin, rayDirection, om.MSpace.kWorld, raycastDistance, False)
                 if intersectionResult is not None:
                     hitPoint = intersectionResult[0]
                     upliftInput[i][k] = hitPoint.y
@@ -318,45 +320,45 @@ class TerroderNode(OpenMayaMPx.MPxNode):
 
 # initializer
 def nodeInitializer():
-    nAttr = OpenMaya.MFnNumericAttribute()
-    tAttr = OpenMaya.MFnTypedAttribute()
+    nAttr = om.MFnNumericAttribute()
+    tAttr = om.MFnTypedAttribute()
     
     # input
-    TerroderNode.iterations = nAttr.create("iterations", "i", OpenMaya.MFnNumericData.kInt, 5)
+    TerroderNode.iterations = nAttr.create("iterations", "i", om.MFnNumericData.kInt, 5)
     MAKE_INPUT(nAttr)
 
-    TerroderNode.cellSize = nAttr.create("cellSize", "cs", OpenMaya.MFnNumericData.kFloat, 0.2)
+    TerroderNode.cellSize = nAttr.create("cellSize", "cs", om.MFnNumericData.kFloat, 0.2)
     MAKE_INPUT(nAttr)
 
     # output
-    TerroderNode.output_mesh = tAttr.create("outputMesh", "om", OpenMaya.MFnData.kMesh)
+    TerroderNode.output_mesh = tAttr.create("outputMesh", "om", om.MFnData.kMesh)
     MAKE_OUTPUT(tAttr)
 
     # Add the attributes to the node and set up the
     #         attributeAffects (addAttribute, and attributeAffects)
     # Don't do try/except here, otherwise the error message won't be printed
-    OpenMayaMPx.MPxNode.addAttribute(TerroderNode.iterations)
-    OpenMayaMPx.MPxNode.addAttribute(TerroderNode.cellSize)
-    OpenMayaMPx.MPxNode.addAttribute(TerroderNode.output_mesh)
+    om.MPxNode.addAttribute(TerroderNode.iterations)
+    om.MPxNode.addAttribute(TerroderNode.cellSize)
+    om.MPxNode.addAttribute(TerroderNode.output_mesh)
 
-    OpenMayaMPx.MPxNode.attributeAffects(TerroderNode.iterations, TerroderNode.output_mesh)
-    OpenMayaMPx.MPxNode.attributeAffects(TerroderNode.cellSize, TerroderNode.output_mesh)
+    om.MPxNode.attributeAffects(TerroderNode.iterations, TerroderNode.output_mesh)
+    om.MPxNode.attributeAffects(TerroderNode.cellSize, TerroderNode.output_mesh)
 
     print("TerroderNode initialised.\n")
 
 # creator
 def nodeCreator():
-    return OpenMayaMPx.asMPxPtr( TerroderNode() )
+    return om.asMPxPtr( TerroderNode() )
 
 # initialize the script plug-in
 def initializePlugin(mobject):
-    mplugin = OpenMayaMPx.MFnPlugin(mobject)
+    mplugin = om.MFnPlugin(mobject, "xd", "1", "Any")
     # Don't use try except bc otherwise the error message won't be printed
-    mplugin.registerNode( kPluginNodeTypeName, nodeId, nodeCreator, nodeInitializer )
+    mplugin.registerNode(kPluginNodeTypeName, nodeId, nodeCreator, nodeInitializer, om.MPxNode.kDependNode)
 
 
 # uninitialize the script plug-in
 def uninitializePlugin(mobject):
-    mplugin = OpenMayaMPx.MFnPlugin(mobject)
+    mplugin = om.MFnPlugin(mobject)
     # Don't use try except bc otherwise the error message won't be printed
     mplugin.deregisterNode( nodeId )
