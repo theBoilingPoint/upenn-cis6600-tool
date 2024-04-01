@@ -9,4 +9,5 @@ $TerroderMenu = `menu -label "Terroder" -parent $gMainWindow -tearOff true`;
 menuItem -label "Create Terroder Node" -command "createTerroderNode" -parent $TerroderMenu;
 
 global proc createTerroderNode() {
+    createNode terroder;
 }
