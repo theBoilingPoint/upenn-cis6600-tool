@@ -32,10 +32,11 @@ class TerroderSimulationParameters(object):
     def __init__(self):
         self.cellSize = 0.1
         self.gridShape = (50, 50)
-        self.upliftScale = 0.05  # scale uplift from [0, 1] to [0, this]
-        self.erosionScale = 0.01
+        self.upliftScale = 0.01  # scale uplift from [0, 1] to [0, this]
+        self.erosionScale = 0.1
         self.minHeight = 0.0
-        self.maxHeight = 5.0
+        self.maxHeight = 3.0
+        self.averageHeight = 1.0  # will be enforced
         self._upliftMapFile = ""
         self._cachedUpliftMap = None
     
@@ -48,7 +49,8 @@ class TerroderSimulationParameters(object):
             and abs(self.upliftScale - other.upliftScale) <= 0.0001 \
             and abs(self.erosionScale - other.erosionScale) <= 0.0001 \
             and abs(self.minHeight - other.minHeight) <= 0.001 \
-            and abs(self.maxHeight - other.maxHeight) <= 0.001 
+            and abs(self.maxHeight - other.maxHeight) <= 0.001 \
+            and abs(self.averageHeight - other.averageHeight) <= 0.001
     
     @property
     def upliftMapFile(self):
@@ -74,6 +76,7 @@ class TerroderSimulationParameters(object):
                         self._cachedUpliftMap[i][k] = TerroderSimulationParameters._readInterpolatedUplift(gsImage, (rx, ry))
             
             self._cachedUpliftMap = np.clip(self._cachedUpliftMap, 0., 1.)
+            om.MGlobal.displayInfo(f"uplift min: {np.min(self._cachedUpliftMap)}, max: {np.max(self._cachedUpliftMap)}, avg: {np.mean(self._cachedUpliftMap)}")
         except FileNotFoundError:
             om.MGlobal.displayWarning(f'File "{value}" not found.')
     
@@ -130,9 +133,6 @@ class TerroderNode(om.MPxNode):
 
     def __init__(self):
         om.MPxNode.__init__(self)
-
-        # parmaeters fixed for now (but maybe not later)
-        self.initialHeight = 1.0
 
         self.simParams = None
         self.heightMapTs = []  # element i is the heightmap after i iterations
@@ -207,7 +207,7 @@ class TerroderNode(om.MPxNode):
                     if slope > steepestSlope[i][k]:
                         steepestSlope[i][k] = slope
 
-        drainageAreaMap = self.makeDrainageAreaMap(curHeightMap)
+        drainageAreaMap = self.computeDrainageAreaMap(curHeightMap)
 
         # Equals 1 at steepest slope 1 and drain area 1
         erosion = np.power(steepestSlope, TerroderNode.STEEPEST_SLOPE_EXPONENT) * np.power(drainageAreaMap, TerroderNode.DRAIN_AREA_EXPONENT)
@@ -215,17 +215,23 @@ class TerroderNode(om.MPxNode):
         nextHeightMap = np.copy(curHeightMap)
         nextHeightMap += self.simParams.upliftMap * self.simParams.upliftScale
         nextHeightMap -= erosion * self.simParams.erosionScale
-        nextHeightMap = np.clip(nextHeightMap, self.simParams.minHeight, self.simParams.maxHeight)  # clip height map
+        nextHeightMap = self.applyHeightConstraints(nextHeightMap)
         self.heightMapTs.append(nextHeightMap)
     
     def makeInitialHeightMap(self) -> np.ndarray:
         shape = self.simParams.gridShape
-        flatMid = np.full(shape, self.initialHeight)
-        randomness = (2. * np.random.random_sample(shape) - 1.) * (self.simParams.cellSize)
-        return flatMid + randomness
+        flatMid = np.full(shape, self.simParams.averageHeight)
+        randomness = (2. * np.random.random_sample(shape) - 1.) * self.simParams.cellSize
+        heightMap = flatMid + randomness
+        return self.applyHeightConstraints(heightMap)
+
+    def applyHeightConstraints(self, heightMap: np.ndarray) -> np.ndarray:
+        newHeightMap = heightMap - np.mean(heightMap) + self.simParams.averageHeight
+        newHeightMap = np.clip(newHeightMap, self.simParams.minHeight, self.simParams.maxHeight)
+        return newHeightMap
 
     # populates self.drainageArea
-    def makeDrainageAreaMap(self, heightMap) -> np.ndarray:
+    def computeDrainageAreaMap(self, heightMap) -> np.ndarray:
          # sort by descending height
         cellHeights = []
         for i in range(self.simParams.gridShape[0]):
@@ -233,7 +239,7 @@ class TerroderNode(om.MPxNode):
                 cellHeights.append((i, k, heightMap[i][k]))
         cellHeights.sort(key = lambda ch: -ch[2]) 
 
-        drainageArea = np.ones(self.simParams.gridShape)
+        drainageAreaMap = np.ones(self.simParams.gridShape) * self.simParams.cellSize
         for i, k, h in cellHeights:
             neighborCells = self.getNeighborCells((i, k))
             relFlows = {}
@@ -252,9 +258,9 @@ class TerroderNode(om.MPxNode):
                 continue
 
             for ni, nk in relFlows:
-                drainageArea[ni][nk] += drainageArea[i][k] * relFlows[(ni, nk)] / totalRelFlow
+                drainageAreaMap[ni][nk] += drainageAreaMap[i][k] * relFlows[(ni, nk)] / totalRelFlow
 
-        return drainageArea
+        return drainageAreaMap
 
     def createOutputMesh(self, outputData: om.MObject, numIterations: int):
         if numIterations >= len(self.heightMapTs):
