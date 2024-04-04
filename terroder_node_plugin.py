@@ -145,9 +145,7 @@ class TerroderNode(om.MPxNode):
         # parmaeters fixed for now (but maybe not later)
         self.initialHeight = 1.0
 
-        # variables used during the command execution
-        self.numIterationsDone = 0
-        self.heightMap = None
+        self.heightMapTs = []  # element i is the heightmap after i iterations
     
     def cellInBounds(self, cell) -> bool:
         return 0 <= cell[0] < self.simParams.gridShape[0] and 0 <= cell[1] < self.simParams.gridShape[1]
@@ -172,8 +170,8 @@ class TerroderNode(om.MPxNode):
         self.simParams.gridShape = (dataBlock.inputValue(TerroderNode.aGridSizeX).asInt(), dataBlock.inputValue(TerroderNode.aGridSizeZ).asInt())
         self.simParams.numIterations = dataBlock.inputValue(TerroderNode.aNumIterations).asInt()
 
-        self.heightMap = self.makeInitialHeightMap()
-        for _ in range(self.simParams.numIterations):
+        self.heightMapTs.append(self.makeInitialHeightMap())
+        while len(self.heightMapTs) <= self.simParams.numIterations:
             self.runIteration()
 
         # Set the output data
@@ -194,13 +192,17 @@ class TerroderNode(om.MPxNode):
         return flatMid + randomness
 
     def runIteration(self):
+        if len(self.heightMapTs) == 0:
+            raise RuntimeError("No initial height map.")
         # Compute steepest slope to a lower neighbor
+        
+        curHeightMap = self.heightMapTs[-1]
         steepestSlope = np.zeros(self.simParams.gridShape)  # 0 if no lower neighbor
         for i in range(self.simParams.gridShape[0]):
             for k in range(self.simParams.gridShape[1]):
-                height = self.heightMap[i][k]
+                height = curHeightMap[i][k]
                 for ni, nk in self.getNeighborCells((i, k)):
-                    neighborHeight = self.heightMap[ni][nk]
+                    neighborHeight = curHeightMap[ni][nk]
                     if neighborHeight >= height:
                         continue
 
@@ -211,23 +213,24 @@ class TerroderNode(om.MPxNode):
                     if slope > steepestSlope[i][k]:
                         steepestSlope[i][k] = slope
 
-        drainageAreaMap = self.makeDrainageAreaMap()
+        drainageAreaMap = self.makeDrainageAreaMap(curHeightMap)
 
         # Equals 1 at steepest slope 1 and drain area 1
         erosion = np.power(steepestSlope, TerroderNode.STEEPEST_SLOPE_EXPONENT) * np.power(drainageAreaMap, TerroderNode.DRAIN_AREA_EXPONENT)
 
-        self.heightMap += self.simParams.upliftMap * self.simParams.upliftScale
-        self.heightMap -= erosion * self.simParams.erosionScale
-        self.heightMap = np.clip(self.heightMap, self.simParams.minHeight, self.simParams.maxHeight)  # clip height map
-        self.numIterationsDone += 1
+        nextHeightMap = np.copy(curHeightMap)
+        nextHeightMap += self.simParams.upliftMap * self.simParams.upliftScale
+        nextHeightMap -= erosion * self.simParams.erosionScale
+        nextHeightMap = np.clip(nextHeightMap, self.simParams.minHeight, self.simParams.maxHeight)  # clip height map
+        self.heightMapTs.append(nextHeightMap)
 
     # populates self.drainageArea
-    def makeDrainageAreaMap(self) -> np.ndarray:
+    def makeDrainageAreaMap(self, heightMap) -> np.ndarray:
          # sort by descending height
         cellHeights = []
         for i in range(self.simParams.gridShape[0]):
             for k in range(self.simParams.gridShape[1]):
-                cellHeights.append((i, k, self.heightMap[i][k]))
+                cellHeights.append((i, k, heightMap[i][k]))
         cellHeights.sort(key = lambda ch: -ch[2]) 
 
         drainageArea = np.ones(self.simParams.gridShape)
@@ -236,7 +239,7 @@ class TerroderNode(om.MPxNode):
             relFlows = {}
             totalRelFlow = 0.0
             for ni, nk in neighborCells:
-                nh = self.heightMap[ni][nk]
+                nh = heightMap[ni][nk]
                 if nh >= h:
                     continue
                 
@@ -254,26 +257,26 @@ class TerroderNode(om.MPxNode):
         return drainageArea
 
     def createOutputMesh(self, outputData: om.MObject):
-        om.MGlobal.displayInfo(f"[DEBUG] Creating output mesh for {self.numIterationsDone} iterations.")
-        if self.heightMap is None:
+        om.MGlobal.displayInfo(f"[DEBUG] Creating output mesh for {self.simParams.numIterations} iterations.")
+        if self.simParams.numIterations >= len(self.heightMapTs):
             raise RuntimeError("The height map hasn't been created.")
 
         vertices = []
         polygonCounts = []
         polygonConnects = []
 
-        heightMap: np.ndarray = self.heightMap
+        heightMap: np.ndarray = self.heightMapTs[self.simParams.numIterations]
         # center at (0, 0)
         xMin = -0.5 * self.simParams.cellSize * (heightMap.shape[0] - 1)
         zMin = -0.5 * self.simParams.cellSize * (heightMap.shape[1] - 1)
 
-        # outputPoints will have the (x, y, z) point for each cell in self.heightMap
+        # outputPoints will have the (x, y, z) point for each cell heightMap
         indexMap = {}
         for i in range(heightMap.shape[0]):
             x = xMin + self.simParams.cellSize * i
             for k in range(heightMap.shape[1]):
                 z = zMin + self.simParams.cellSize * k
-                y = self.heightMap[i][k]
+                y = heightMap[i][k]
                 vertices.append(om.MPoint(x, y, z))
                 indexMap[(i, k)] = len(vertices) - 1
 
@@ -294,8 +297,8 @@ class TerroderNode(om.MPxNode):
 
     # ROUGHLY from https://stackoverflow.com/a/76686523
     # TODO: inspect for correctness
-    def makeHeightMapLaplacian(self):
-        grad_x, grad_z = np.gradient(self.heightMap, self.xStep, self.zStep)
+    def makeHeightMapLaplacian(self, heightMap):
+        grad_x, grad_z = np.gradient(heightMap, self.xStep, self.zStep)
         grad_xx = np.gradient(grad_x, self.xStep, axis=0)
         grad_zz = np.gradient(grad_z, self.zStep, axis=1)
         return grad_xx + grad_zz
