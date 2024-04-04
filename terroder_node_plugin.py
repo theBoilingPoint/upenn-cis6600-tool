@@ -41,7 +41,7 @@ class TerroderSimulationParameters(object):
 
     def __init__(self):
         self.cellSize = 0.1
-        self.gridShape = (100, 100)
+        self.gridShape = (50, 50)
         self.numIterations = 5
         self.upliftMapFile = ""
         self.upliftScale = 0.05  # scale uplift from [0, 1] to [0, this]
@@ -164,7 +164,7 @@ class TerroderNode(om.MPxNode):
         # get the input data
         self.simParams = TerroderSimulationParameters()
         self.simParams.upliftMapFile = dataBlock.inputValue(TerroderNode.aUpliftMapFile).asString()
-        self.simParams.cellSize = dataBlock.inputValue(TerroderNode.aCellSize).asDouble()
+        self.simParams.cellSize = dataBlock.inputValue(TerroderNode.aCellSize).asFloat()
         self.simParams.gridShape = (dataBlock.inputValue(TerroderNode.aGridSizeX).asInt(), dataBlock.inputValue(TerroderNode.aGridSizeZ).asInt())
         self.simParams.numIterations = dataBlock.inputValue(TerroderNode.aNumIterations).asInt()
 
@@ -254,42 +254,40 @@ class TerroderNode(om.MPxNode):
         om.MGlobal.displayInfo("[DEBUG] CreateOutputMesh")
         if self.heightMap is None:
             raise RuntimeError("The height map hasn't been created.")
-        
-        
-        # TEST CODE
-        vertices = [om.MPoint(0, 0, 0), om.MPoint(0, 1, 0), om.MPoint(1, 1, 0), om.MPoint(1, 0, 0)]
-        polygonCounts = [4]
-        polygonConnects = [0, 1, 2, 3]
-        fnMesh = om.MFnMesh()
-        meshObj: om.MObject = fnMesh.create(vertices, polygonCounts, polygonConnects, parent=outputData)
-        return meshObj
-        
+
+        vertices = []
+        polygonCounts = []
+        polygonConnects = []
+
         heightMap: np.ndarray = self.heightMap
         # center at (0, 0)
         xMin = -0.5 * self.simParams.cellSize * (heightMap.shape[0] - 1)
         zMin = -0.5 * self.simParams.cellSize * (heightMap.shape[1] - 1)
 
         # outputPoints will have the (x, y, z) point for each cell in self.heightMap
-        outputPoints = np.empty((heightMap.shape[0], heightMap.shape[1], 3))
+        indexMap = {}
         for i in range(heightMap.shape[0]):
             x = xMin + self.simParams.cellSize * i
-            for k in range(self.heightMap.shape[1]):
+            for k in range(heightMap.shape[1]):
                 z = zMin + self.simParams.cellSize * k
-                outputPoints[i][k][0] = x
-                outputPoints[i][k][1] = self.heightMap[i][k]
-                outputPoints[i][k][2] = z
+                y = self.heightMap[i][k]
+                vertices.append(om.MPoint(x, y, z))
+                indexMap[(i, k)] = len(vertices) - 1
 
-        mergeTolerance = self.simParams.cellSize / 2.1
-        outputMesh = om.MFnMesh()
-        for i in range(outputPoints.shape[0] - 1):
-            for k in range(outputPoints.shape[1] - 1):
-                a = om.MPoint([outputPoints[i][k][d] for d in range(3)])
-                b = om.MPoint([outputPoints[i+1][k][d] for d in range(3)])
-                c = om.MPoint([outputPoints[i+1][k+1][d] for d in range(3)])
-                d = om.MPoint([outputPoints[i][k+1][d] for d in range(3)])
-                outputMesh.addPolygon([a, b, c, d], True, mergeTolerance)
-        
-        return outputMesh
+        for i in range(heightMap.shape[0] - 1):
+            for k in range(heightMap.shape[1] - 1):
+                # Create the quad with lower corner at grid point (i, k)
+                polygonCounts.append(4)
+                polygonConnects.append(indexMap[(i, k)])
+                polygonConnects.append(indexMap[(i + 1, k)])
+                polygonConnects.append(indexMap[(i + 1, k + 1)])
+                polygonConnects.append(indexMap[(i, k + 1)])
+
+        om.MGlobal.displayInfo(f"[DEBUG] creating mesh with {len(vertices)} vertices and {len(polygonCounts)} polygons")
+
+        fnMesh = om.MFnMesh()
+        meshObj: om.MObject = fnMesh.create(vertices, polygonCounts, polygonConnects, parent=outputData)
+        return meshObj
 
     # ROUGHLY from https://stackoverflow.com/a/76686523
     # TODO: inspect for correctness
