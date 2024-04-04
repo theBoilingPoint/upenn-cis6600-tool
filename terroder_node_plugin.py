@@ -153,8 +153,8 @@ class TerroderNode(om.MPxNode):
         if (plug != TerroderNode.aOutputMesh) and (plug.parent() != TerroderNode.aOutputMesh):
             return None
         
-        timeData: om.MTime = dataBlock.inputValue(TerroderNode.aTime).asTime()
-        numIterations = max(0, int(timeData.asUnits(om.MTime.kFilm)) - 1)
+        rawTime = dataBlock.inputValue(TerroderNode.aTime).asFloat()
+        numIterations = max(0, int(rawTime) - 1)
 
         # get the input data
         newSimParams = TerroderSimulationParameters()
@@ -166,8 +166,6 @@ class TerroderNode(om.MPxNode):
             om.MGlobal.displayInfo("[DEBUG] Using new sim params and resetting simulation")
             self.simParams = newSimParams
             self.heightMapTs = []
-        
-        om.MGlobal.displayInfo(f"[DEBUG] Computing up to {numIterations} iterations.")
 
         # Simulate until we have at least numIters iterations
         while numIterations >= len(self.heightMapTs):
@@ -188,6 +186,8 @@ class TerroderNode(om.MPxNode):
         if len(self.heightMapTs) == 0:
             self.heightMapTs.append(self.makeInitialHeightMap())
             return
+        
+        om.MGlobal.displayInfo(f"[DEBUG] Computing iteration {len(self.heightMapTs)}.")
         
         # Compute steepest slope to a lower neighbor
         curHeightMap = self.heightMapTs[-1]
@@ -288,8 +288,6 @@ class TerroderNode(om.MPxNode):
                 polygonConnects.append(indexMap[(i + 1, k + 1)])
                 polygonConnects.append(indexMap[(i, k + 1)])
 
-        om.MGlobal.displayInfo(f"[DEBUG] creating mesh with {len(vertices)} vertices and {len(polygonCounts)} polygons")
-
         fnMesh = om.MFnMesh()
         meshObj: om.MObject = fnMesh.create(vertices, polygonCounts, polygonConnects, parent=outputData)
         return meshObj
@@ -304,12 +302,12 @@ class TerroderNode(om.MPxNode):
 
     @staticmethod
     def initialize():
-        uAttr = om.MFnUnitAttribute()
         nAttr = om.MFnNumericAttribute()
         tAttr = om.MFnTypedAttribute()
 
-        TerroderNode.aTime = uAttr.create("time", "t", om.MFnUnitAttribute.kTime, 0.0)
-        MAKE_INPUT(uAttr)
+        TerroderNode.aTime = nAttr.create("time", "t", om.MFnNumericData.kFloat)
+        MAKE_INPUT(nAttr)
+        nAttr.default = 1.0
 
         # input
         TerroderNode.aUpliftMapFile = tAttr.create("upliftMapFile", "uf", om.MFnNumericData.kString)
