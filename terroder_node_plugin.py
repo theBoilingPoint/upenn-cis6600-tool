@@ -76,7 +76,6 @@ class TerroderSimulationParameters(object):
                         self._cachedUpliftMap[i][k] = TerroderSimulationParameters._readInterpolatedUplift(gsImage, (rx, ry))
             
             self._cachedUpliftMap = np.clip(self._cachedUpliftMap, 0., 1.)
-            om.MGlobal.displayInfo(f"uplift min: {np.min(self._cachedUpliftMap)}, max: {np.max(self._cachedUpliftMap)}, avg: {np.mean(self._cachedUpliftMap)}")
         except FileNotFoundError:
             om.MGlobal.displayWarning(f'File "{value}" not found.')
     
@@ -187,8 +186,6 @@ class TerroderNode(om.MPxNode):
             self.heightMapTs.append(self.makeInitialHeightMap())
             return
         
-        om.MGlobal.displayInfo(f"[DEBUG] Computing iteration {len(self.heightMapTs)}.")
-        
         # Compute steepest slope to a lower neighbor
         curHeightMap = self.heightMapTs[-1]
         steepestSlope = np.zeros(self.simParams.gridShape)  # 0 if no lower neighbor
@@ -287,12 +284,12 @@ class TerroderNode(om.MPxNode):
 
         for i in range(heightMap.shape[0] - 1):
             for k in range(heightMap.shape[1] - 1):
-                # Create the quad with lower corner at grid point (i, k)
+                # Create the quad with lower corner at grid point (i, k); this order lets the top be shaded
                 polygonCounts.append(4)
                 polygonConnects.append(indexMap[(i, k)])
-                polygonConnects.append(indexMap[(i + 1, k)])
-                polygonConnects.append(indexMap[(i + 1, k + 1)])
                 polygonConnects.append(indexMap[(i, k + 1)])
+                polygonConnects.append(indexMap[(i + 1, k + 1)])
+                polygonConnects.append(indexMap[(i + 1, k)])
 
         fnMesh = om.MFnMesh()
         meshObj: om.MObject = fnMesh.create(vertices, polygonCounts, polygonConnects, parent=outputData)
