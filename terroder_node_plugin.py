@@ -117,13 +117,15 @@ class TerroderSimulationParameters(object):
 
 class TerroderNode(om.MPxNode):
     # constants
-    TYPE_NAME = "terroder"
+    TYPE_NAME = "TerroderNode"
     ID = om.MTypeId(0x0008099a)
     NEIGHBOR_ORDER = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
     # SLOPE_NORM_EXPONENT = 4.0
     STEEPEST_SLOPE_EXPONENT = 2.0
     DRAIN_AREA_EXPONENT = 1.0
 
+    OUTPUT_MESH_ATTR_LONG_NAME = "outputMesh"
+    OUTPUT_MESH_ATTR_SHORT_NAME = "om"
 
     # Attributes
     # input
@@ -325,7 +327,7 @@ class TerroderNode(om.MPxNode):
         nAttr.default = 50
 
         # output
-        TerroderNode.aOutputMesh = tAttr.create("outputMesh", "om", om.MFnData.kMesh)
+        TerroderNode.aOutputMesh = tAttr.create(TerroderNode.OUTPUT_MESH_ATTR_LONG_NAME, TerroderNode.OUTPUT_MESH_ATTR_SHORT_NAME, om.MFnData.kMesh)
         MAKE_OUTPUT(tAttr)
 
         # Add the attributes to the node and set up the
@@ -349,6 +351,36 @@ class TerroderNode(om.MPxNode):
     @staticmethod
     def create():
         return TerroderNode()
+    
+class TerroderUI(object):
+    """
+    Static class to organize UI info
+    """
+    createdMenuName = ""
+
+    @staticmethod
+    def createMenu():
+        mainWindowName = mm.eval('string $temp = $gMainWindow;')
+        TerroderUI.createdMenuName = cmds.menu(l="Terroder", p=mainWindowName)
+        invokeMenuItemName = cmds.menuItem(l="Create Terroder Mesh", p=TerroderUI.createdMenuName, c=TerroderUI._makeInvokeCommand())
+
+    @staticmethod
+    def destroyMenu():
+        cmds.deleteUI(TerroderUI.createdMenuName)
+        createdMenuName = ""
+    
+    @staticmethod
+    def _makeInvokeCommand() -> str:
+        lines = [
+            'transformNodeName = cmds.createNode("transform")',
+            'visibleMeshNodeName = cmds.createNode("mesh", parent=transformNodeName)',
+            'cmds.sets(visibleMeshNodeName, add="initialShadingGroup")',
+            f'terroderNodeName = cmds.createNode("{TerroderNode.TYPE_NAME}")',
+            f'cmds.connectAttr(terroderNodeName + ".{TerroderNode.OUTPUT_MESH_ATTR_LONG_NAME}", visibleMeshNodeName + ".inMesh")'
+        ]
+
+        return "; ".join(lines)
+
 
 # initialize the script plug-in
 def initializePlugin(mObject):
@@ -356,19 +388,12 @@ def initializePlugin(mObject):
     # Don't use try except bc otherwise the error message won't be printed
     mPlugin.registerNode(TerroderNode.TYPE_NAME, TerroderNode.ID, TerroderNode.create, TerroderNode.initialize, om.MPxNode.kDependNode)
 
-    menuMelPath = f"{mPlugin.loadPath()}/TerroderMenu.mel"
-    if os.path.exists(menuMelPath):
-        mm.eval(f"source \"{menuMelPath}\";")
-        print(f"Loaded the script {menuMelPath}.")
-    else:
-        print(f"Could not find the script in {menuMelPath}.")
+    TerroderUI.createMenu()
 
 # uninitialize the script plug-in
 def uninitializePlugin(mObject):
+    TerroderUI.destroyMenu()
+
     mplugin = om.MFnPlugin(mObject)
     # Don't use try except bc otherwise the error message won't be printed
     mplugin.deregisterNode(TerroderNode.ID)
-
-    # Make sure menuName matches what written in TerroderMenu.mel
-    menuName = "TerroderMenu"
-    mm.eval(f"deleteUI ${menuName};")
