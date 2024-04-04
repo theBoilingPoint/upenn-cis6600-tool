@@ -7,6 +7,17 @@ import maya.mel as mm
 import numpy as np
 from PIL import Image
 
+"""
+TO SEE GEOMETRY: 
+
+import maya.cmds as cmds
+cmds.createNode("transform", name="terroderTransform1")
+cmds.createNode("mesh", name="terroderShape1", parent="terroderTransform1")
+cmds.sets("terroderShape1", add="initialShadingGroup")
+cmds.createNode("terroder", name="terroderNode1")
+cmds.connectAttr("terroderNode1.outputMesh", "terroderShape1.inMesh")
+"""
+
 # USE PYTHON API 2.0
 maya_useNewAPI = True
 
@@ -25,8 +36,6 @@ def MAKE_OUTPUT(attr):
 
 # Give the node a unique ID. Make sure this ID is different from all of your
 # other nodes!
-nodeId = om.MTypeId(0x8878)
-
 class TerroderSimulationParameters(object):
     # All parameters that can be changed by the user
 
@@ -106,21 +115,23 @@ class TerroderSimulationParameters(object):
 class TerroderNode(om.MPxNode):
     # constants
     TYPE_NAME = "terroder"
+    ID = om.MTypeId(0x0008099a)
     NEIGHBOR_ORDER = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
     # SLOPE_NORM_EXPONENT = 4.0
     STEEPEST_SLOPE_EXPONENT = 2.0
     DRAIN_AREA_EXPONENT = 1.0
 
-    # Declare class variables:
+
+    # Attributes
     # input
-    upliftMapFile = om.MObject()
-    iterations = om.MObject()
-    cellSize = om.MObject()
-    gridSizeX = om.MObject()
-    gridSizeZ = om.MObject()
+    aUpliftMapFile = None
+    aNumIterations = None
+    aCellSize = None
+    aGridSizeX = None
+    aGridSizeZ = None
 
     # output
-    outputMesh = om.MObject()
+    aOutputMesh = None
 
     def __init__(self):
         om.MPxNode.__init__(self)
@@ -145,33 +156,38 @@ class TerroderNode(om.MPxNode):
                 neighborCells.append((ni, nk))
         return neighborCells
     
-    def compute(self, plug, dataBlock: om.MDataBlock):
+    def compute(self, plug: om.MPlug, dataBlock: om.MDataBlock):
+        if (plug != TerroderNode.aOutputMesh) and (plug.parent() != TerroderNode.aOutputMesh):
+            return None
+
+        om.MGlobal.displayInfo("[DEBUG] terroder.compute")
         # get the input data
         self.simParams = TerroderSimulationParameters()
-        self.simParams.upliftMapFile = dataBlock.inputValue(TerroderNode.upliftMapFile).asString()
-        self.simParams.cellSize = dataBlock.inputValue(TerroderNode.cellSize).asDouble()
-        self.simParams.gridShape = (dataBlock.inputValue(TerroderNode.gridSizeX).asInt(), dataBlock.inputValue(TerroderNode.gridSizeZ).asInt())
-        self.simParams.numIterations = dataBlock.inputValue(TerroderNode.iterations).asInt()
+        self.simParams.upliftMapFile = dataBlock.inputValue(TerroderNode.aUpliftMapFile).asString()
+        self.simParams.cellSize = dataBlock.inputValue(TerroderNode.aCellSize).asDouble()
+        self.simParams.gridShape = (dataBlock.inputValue(TerroderNode.aGridSizeX).asInt(), dataBlock.inputValue(TerroderNode.aGridSizeZ).asInt())
+        self.simParams.numIterations = dataBlock.inputValue(TerroderNode.aNumIterations).asInt()
 
         self.heightMap = self.makeInitialHeightMap()
         for _ in range(self.simParams.numIterations):
-            pass
+            self.runIteration()
 
         # Set the output data
-        outputMeshHandle: om.MDataHandle = dataBlock.outputValue(TerroderNode.outputMesh)
-
-        self.runSimulation()
-        # self.createOutputMesh()
-        outputMeshHandle.setMObject(self.createOutputMesh())
+        outputMeshHandle: om.MDataHandle = dataBlock.outputValue(TerroderNode.aOutputMesh)
+        dataCreator: om.MFnMeshData = om.MFnMeshData()
+        outputData: om.MObject = dataCreator.create()
+        self.createOutputMesh(outputData)
+        outputMeshHandle.setMObject(outputData)
         outputMeshHandle.setClean()
-        dataBlock.setClean(plug)
-        # Node doesn't have a setResult method
-        # self.setResult("[DEBUG] Executed command")
+        
+        # successfully computed
+        return self
     
     def makeInitialHeightMap(self):
+        om.MGlobal.displayInfo("[DEBUG] Making initial heightmap")
         shape = self.simParams.gridShape
         flatMid = np.full(shape, self.initialHeight)
-        randomness = (2. * np.random.random_sample(shape) - 1.) * (self.cellSize)
+        randomness = (2. * np.random.random_sample(shape) - 1.) * (self.simParams.cellSize)
         return flatMid + randomness
 
     def runIteration(self):
@@ -192,10 +208,10 @@ class TerroderNode(om.MPxNode):
                     if slope > steepestSlope[i][k]:
                         steepestSlope[i][k] = slope
 
-        self.drainageAreaMap = self.makeDrainageAreaMap()
+        drainageAreaMap = self.makeDrainageAreaMap()
 
         # Equals 1 at steepest slope 1 and drain area 1
-        erosion = np.power(steepestSlope, TerroderNode.STEEPEST_SLOPE_EXPONENT) * np.power(self.drainageAreaMap, TerroderNode.DRAIN_AREA_EXPONENT)
+        erosion = np.power(steepestSlope, TerroderNode.STEEPEST_SLOPE_EXPONENT) * np.power(drainageAreaMap, TerroderNode.DRAIN_AREA_EXPONENT)
 
         self.heightMap += self.simParams.upliftMap * self.simParams.upliftScale
         self.heightMap -= erosion * self.simParams.erosionScale
@@ -206,12 +222,12 @@ class TerroderNode(om.MPxNode):
     def makeDrainageAreaMap(self) -> np.ndarray:
          # sort by descending height
         cellHeights = []
-        for i in range(self.gridShape[0]):
-            for k in range(self.gridShape[1]):
+        for i in range(self.simParams.gridShape[0]):
+            for k in range(self.simParams.gridShape[1]):
                 cellHeights.append((i, k, self.heightMap[i][k]))
         cellHeights.sort(key = lambda ch: -ch[2]) 
 
-        drainageArea = np.ones(self.gridShape)
+        drainageArea = np.ones(self.simParams.gridShape)
         for i, k, h in cellHeights:
             neighborCells = self.getNeighborCells((i, k))
             relFlows = {}
@@ -233,30 +249,37 @@ class TerroderNode(om.MPxNode):
                 drainageArea[ni][nk] += drainageArea[i][k] * relFlows[(ni, nk)] / totalRelFlow
 
         return drainageArea
-    
-    def runSimulation(self):
-        if self.upliftMap is None:
-            raise RuntimeError("The uplift map hasn't been created.")
-        self.heightMap = self.makeInitialHeightMap()
-        self.drainageAreaMap = np.ones(self.upliftMap.shape)
-        for _ in range(self.numIters):
-            self.runIteration()
 
-    def createOutputMesh(self):
+    def createOutputMesh(self, outputData: om.MObject):
+        om.MGlobal.displayInfo("[DEBUG] CreateOutputMesh")
         if self.heightMap is None:
             raise RuntimeError("The height map hasn't been created.")
+        
+        
+        # TEST CODE
+        vertices = [om.MPoint(0, 0, 0), om.MPoint(0, 1, 0), om.MPoint(1, 1, 0), om.MPoint(1, 0, 0)]
+        polygonCounts = [4]
+        polygonConnects = [0, 1, 2, 3]
+        fnMesh = om.MFnMesh()
+        meshObj: om.MObject = fnMesh.create(vertices, polygonCounts, polygonConnects, parent=outputData)
+        return meshObj
+        
+        heightMap: np.ndarray = self.heightMap
+        # center at (0, 0)
+        xMin = -0.5 * self.simParams.cellSize * (heightMap.shape[0] - 1)
+        zMin = -0.5 * self.simParams.cellSize * (heightMap.shape[1] - 1)
 
         # outputPoints will have the (x, y, z) point for each cell in self.heightMap
-        outputPoints = np.empty((self.heightMap.shape[0], self.heightMap.shape[1], 3))
-        for i in range(self.heightMap.shape[0]):
-            x = self.interpolateX(float(i) / float(self.heightMap.shape[0] - 1))
+        outputPoints = np.empty((heightMap.shape[0], heightMap.shape[1], 3))
+        for i in range(heightMap.shape[0]):
+            x = xMin + self.simParams.cellSize * i
             for k in range(self.heightMap.shape[1]):
-                z = self.interpolateZ(float(k) / float(self.heightMap.shape[1] - 1))
+                z = zMin + self.simParams.cellSize * k
                 outputPoints[i][k][0] = x
                 outputPoints[i][k][1] = self.heightMap[i][k]
                 outputPoints[i][k][2] = z
 
-        mergeTolerance = self.cellSize / 2.1
+        mergeTolerance = self.simParams.cellSize / 2.1
         outputMesh = om.MFnMesh()
         for i in range(outputPoints.shape[0] - 1):
             for k in range(outputPoints.shape[1] - 1):
@@ -277,58 +300,62 @@ class TerroderNode(om.MPxNode):
         return grad_xx + grad_zz
 
     @staticmethod
-    def initializer():
+    def initialize():
         nAttr = om.MFnNumericAttribute()
         tAttr = om.MFnTypedAttribute()
         
         # input
-        TerroderNode.upliftMapFile = tAttr.create("upliftMapFile", "uf", om.MFnNumericData.kString)
+        TerroderNode.aUpliftMapFile = tAttr.create("upliftMapFile", "uf", om.MFnNumericData.kString)
         MAKE_INPUT(tAttr)
         tAttr.usedAsFilename = True
         
-        TerroderNode.iterations = nAttr.create("iterations", "i", om.MFnNumericData.kInt, 5)
+        TerroderNode.aNumIterations = nAttr.create("iterations", "i", om.MFnNumericData.kInt)
         MAKE_INPUT(nAttr)
+        nAttr.default = 5
 
-        TerroderNode.cellSize = nAttr.create("cellSize", "cs", om.MFnNumericData.kFloat, 0.1)
+        TerroderNode.aCellSize = nAttr.create("cellSize", "cs", om.MFnNumericData.kFloat)
         MAKE_INPUT(nAttr)
+        nAttr.default = 0.1
 
-        TerroderNode.gridSizeX = nAttr.create("gridSizeX", "gsx", om.MFnNumericData.kInt, 100)
+        TerroderNode.aGridSizeX = nAttr.create("gridSizeX", "gsx", om.MFnNumericData.kInt)
         MAKE_INPUT(nAttr)
+        nAttr.default = 100
 
-        TerroderNode.gridSizeZ = nAttr.create("gridSizeZ", "gsz", om.MFnNumericData.kInt, 100)
+        TerroderNode.aGridSizeZ = nAttr.create("gridSizeZ", "gsz", om.MFnNumericData.kInt)
         MAKE_INPUT(nAttr)
+        nAttr.default = 100
 
         # output
-        TerroderNode.outputMesh = tAttr.create("outputMesh", "om", om.MFnData.kMesh)
+        TerroderNode.aOutputMesh = tAttr.create("outputMesh", "om", om.MFnData.kMesh)
         MAKE_OUTPUT(tAttr)
 
         # Add the attributes to the node and set up the
         #         attributeAffects (addAttribute, and attributeAffects)
         # Don't do try/except here, otherwise the error message won't be printed
-        om.MPxNode.addAttribute(TerroderNode.upliftMapFile)
-        om.MPxNode.addAttribute(TerroderNode.iterations)
-        om.MPxNode.addAttribute(TerroderNode.cellSize)
-        om.MPxNode.addAttribute(TerroderNode.gridSizeX)
-        om.MPxNode.addAttribute(TerroderNode.gridSizeZ)
-        om.MPxNode.addAttribute(TerroderNode.outputMesh)
+        om.MPxNode.addAttribute(TerroderNode.aUpliftMapFile)
+        om.MPxNode.addAttribute(TerroderNode.aNumIterations)
+        om.MPxNode.addAttribute(TerroderNode.aCellSize)
+        om.MPxNode.addAttribute(TerroderNode.aGridSizeX)
+        om.MPxNode.addAttribute(TerroderNode.aGridSizeZ)
+        om.MPxNode.addAttribute(TerroderNode.aOutputMesh)
 
-        om.MPxNode.attributeAffects(TerroderNode.upliftMapFile, TerroderNode.outputMesh)
-        om.MPxNode.attributeAffects(TerroderNode.iterations, TerroderNode.outputMesh)
-        om.MPxNode.attributeAffects(TerroderNode.cellSize, TerroderNode.outputMesh)
-        om.MPxNode.attributeAffects(TerroderNode.gridSizeX, TerroderNode.outputMesh)
-        om.MPxNode.attributeAffects(TerroderNode.gridSizeZ, TerroderNode.outputMesh)
+        om.MPxNode.attributeAffects(TerroderNode.aUpliftMapFile, TerroderNode.aOutputMesh)
+        om.MPxNode.attributeAffects(TerroderNode.aNumIterations, TerroderNode.aOutputMesh)
+        om.MPxNode.attributeAffects(TerroderNode.aCellSize, TerroderNode.aOutputMesh)
+        om.MPxNode.attributeAffects(TerroderNode.aGridSizeX, TerroderNode.aOutputMesh)
+        om.MPxNode.attributeAffects(TerroderNode.aGridSizeZ, TerroderNode.aOutputMesh)
 
         print("TerroderNode initialised.\n")
     
     @staticmethod
-    def creator():
+    def create():
         return TerroderNode()
 
 # initialize the script plug-in
 def initializePlugin(mobject):
     mplugin = om.MFnPlugin(mobject, "Company", "1.0", "Any")
     # Don't use try except bc otherwise the error message won't be printed
-    mplugin.registerNode(TerroderNode.TYPE_NAME, nodeId, TerroderNode.creator, TerroderNode.initializer, om.MPxNode.kDependNode)
+    mplugin.registerNode(TerroderNode.TYPE_NAME, TerroderNode.ID, TerroderNode.create, TerroderNode.initialize, om.MPxNode.kDependNode)
 
     melPath = f"{mplugin.loadPath()}/TerroderMenu.mel"
     if os.path.exists(melPath):
@@ -341,7 +368,7 @@ def initializePlugin(mobject):
 def uninitializePlugin(mobject):
     mplugin = om.MFnPlugin(mobject)
     # Don't use try except bc otherwise the error message won't be printed
-    mplugin.deregisterNode( nodeId )
+    mplugin.deregisterNode(TerroderNode.ID)
 
     # Make sure menuName matches what written in TerroderMenu.mel
     menuName = "TerroderMenu"
