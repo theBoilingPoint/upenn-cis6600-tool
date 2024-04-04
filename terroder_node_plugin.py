@@ -362,7 +362,7 @@ class TerroderUI(object):
     def createMenu():
         mainWindowName = mm.eval('string $temp = $gMainWindow;')
         TerroderUI.createdMenuName = cmds.menu(l="Terroder", p=mainWindowName)
-        invokeMenuItemName = cmds.menuItem(l="Create Terroder Mesh", p=TerroderUI.createdMenuName, c=TerroderUI._makeInvokeCommand())
+        invokeMenuItemName = cmds.menuItem(l="Create Terroder Mesh", p=TerroderUI.createdMenuName, c=TerroderUI._invokeCommand)
 
     @staticmethod
     def destroyMenu():
@@ -370,17 +370,24 @@ class TerroderUI(object):
         createdMenuName = ""
     
     @staticmethod
-    def _makeInvokeCommand() -> str:
-        lines = [
-            'transformNodeName = cmds.createNode("transform")',
-            'visibleMeshNodeName = cmds.createNode("mesh", parent=transformNodeName)',
-            'cmds.sets(visibleMeshNodeName, add="initialShadingGroup")',
-            f'terroderNodeName = cmds.createNode("{TerroderNode.TYPE_NAME}")',
-            f'cmds.connectAttr(terroderNodeName + ".{TerroderNode.OUTPUT_MESH_ATTR_LONG_NAME}", visibleMeshNodeName + ".inMesh")'
-        ]
+    def _invokeCommand(*args) -> None:
+        transformNodeName = cmds.createNode("transform")
+        visibleMeshNodeName = cmds.createNode("mesh", parent=transformNodeName)
+        cmds.sets(visibleMeshNodeName, add="initialShadingGroup")
+        terroderNodeName = cmds.createNode(TerroderNode.TYPE_NAME)
+        cmds.connectAttr(f"{terroderNodeName}.{TerroderNode.OUTPUT_MESH_ATTR_LONG_NAME}", f"{visibleMeshNodeName}.inMesh")
 
-        return "; ".join(lines)
-
+        """
+        BELOW: Try to select the transform and switch to the TerroderNode window in the attribute editor
+        doesn't work yet (perhaps too quick? last line does the job if done manually in script editor)
+        
+        cmds.select(transformNodeName, r=True)
+        attrEdTabLayoutName = mm.eval('string $temp = $gAETabLayoutName;')
+        tabNames = cmds.tabLayout(attrEdTabLayoutName, q=True, tli=True)
+        for i in range(len(tabNames)):
+            if tabNames[i] == terroderNodeName:
+                cmds.tabLayout(attrEdTabLayoutName, e=True, sti=i+1)
+        """
 
 # initialize the script plug-in
 def initializePlugin(mObject):
