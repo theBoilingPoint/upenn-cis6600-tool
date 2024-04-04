@@ -43,13 +43,12 @@ class TerroderSimulationParameters(object):
         self.cellSize = 0.1
         self.gridShape = (50, 50)
         self.numIterations = 5
-        self.upliftMapFile = ""
         self.upliftScale = 0.05  # scale uplift from [0, 1] to [0, this]
         self.erosionScale = 0.01
         self.minHeight = 0.0
         self.maxHeight = 5.0
+        self._upliftMapFile = ""
         self._cachedUpliftMap = None
-        self._cachedUpliftMapFile = ""
     
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, TerroderSimulationParameters):
@@ -64,46 +63,50 @@ class TerroderSimulationParameters(object):
             and abs(self.maxHeight - other.maxHeight) <= 0.001 
     
     @property
-    def upliftMap(self):
-        if self._cachedUpliftMap is not None and self._cachedUpliftMapFile == self.upliftMapFile:
-            return self._cachedUpliftMapFile
-        if len(self.upliftMapFile) == 0:
-            return np.zeros(self.gridShape)
-
-        self._cachedUpliftMapFile = ""
+    def upliftMapFile(self):
+        return self._upliftMapFile
+    
+    @upliftMapFile.setter
+    def upliftMapFile(self, value):
+        if self._upliftMapFile == value:
+            return
+        
+        self._upliftMapFile = value
         self._cachedUpliftMap = None
-
-        # Open the file and read in the uplift map
         try:
-            with Image.open(self.upliftMapFile) as im:
-                self._cachedUpliftMapFile = self.upliftMapFile
-                self._cachedUpliftMap = np.zeros(self.gridShape)
-                step = (float(im.size[0]) / float(self.gridShape[0]), float(im.size[1]) / float(self.gridShape[1]))
+            with Image.open(self.upliftMapFile) as image:
+                gsImage = image.convert('L')  # grayscale
+                step = (float(gsImage.size[0]) / float(self.gridShape[0]), float(gsImage.size[1]) / float(self.gridShape[1]))
+                
+                self._cachedUpliftMap = np.empty(self.gridShape)
                 for i in range(self.gridShape[0]):
                     for k in range(self.gridShape[1]):
                         # Interpolate (i, k)
                         rx, ry = step[0] * i, step[1] * k
-                        self._cachedUpliftMap[i][k] = TerroderSimulationParameters.readInterpolatedUplift(im, (rx, ry))
+                        self._cachedUpliftMap[i][k] = TerroderSimulationParameters._readInterpolatedUplift(gsImage, (rx, ry))
+            
+            self._cachedUpliftMap = np.clip(self._cachedUpliftMap, 0., 1.)
         except FileNotFoundError:
-            return np.zeros(self.gridShape)
-        
-        return self._cachedUpliftMap
+            om.MGlobal.displayWarning(f'File "{value}" not found.')
+    
+    @property
+    def upliftMap(self):
+        return self._cachedUpliftMap if self._cachedUpliftMap is not None else np.full(self.gridShape, 0.5)
     
     @staticmethod
-    def readInterpolatedUplift(image: Image, coords):
+    def _readInterpolatedUplift(grayscaleImage: Image, coords):
         x, y = coords
         fx, fy = int(np.floor(x)), int(np.floor(y))
         uplifts = []
         weights = []
         for dx in range(0, 2):
             for dy in range(0, 2):
-                if not (0 <= fx + dx < image.size[0] and 0 <= fy + dy < image.size[1]):
+                if not (0 <= fx + dx < grayscaleImage.size[0] and 0 <= fy + dy < grayscaleImage.size[1]):
                     continue
 
                 weight = max(0, (1 - abs(fx + dx - x)) * (1 - abs(fy + dy - y)))
                 weights.append(weight)
-                color = image.getpixel((fx + dx, fy + dy))
-                uplifts.append(max(color[0], color[1], color[2]))
+                uplifts.append(grayscaleImage.getpixel((fx + dx, fy + dy)))
         
         totalWeight = sum(weights)
         if totalWeight <= 0:
@@ -160,7 +163,6 @@ class TerroderNode(om.MPxNode):
         if (plug != TerroderNode.aOutputMesh) and (plug.parent() != TerroderNode.aOutputMesh):
             return None
 
-        om.MGlobal.displayInfo("[DEBUG] terroder.compute")
         # get the input data
         self.simParams = TerroderSimulationParameters()
         self.simParams.upliftMapFile = dataBlock.inputValue(TerroderNode.aUpliftMapFile).asString()
@@ -184,7 +186,6 @@ class TerroderNode(om.MPxNode):
         return self
     
     def makeInitialHeightMap(self):
-        om.MGlobal.displayInfo("[DEBUG] Making initial heightmap")
         shape = self.simParams.gridShape
         flatMid = np.full(shape, self.initialHeight)
         randomness = (2. * np.random.random_sample(shape) - 1.) * (self.simParams.cellSize)
@@ -251,7 +252,7 @@ class TerroderNode(om.MPxNode):
         return drainageArea
 
     def createOutputMesh(self, outputData: om.MObject):
-        om.MGlobal.displayInfo("[DEBUG] CreateOutputMesh")
+        om.MGlobal.displayInfo(f"[DEBUG] Creating output mesh for {self.numIterationsDone} iterations.")
         if self.heightMap is None:
             raise RuntimeError("The height map hasn't been created.")
 
@@ -317,11 +318,11 @@ class TerroderNode(om.MPxNode):
 
         TerroderNode.aGridSizeX = nAttr.create("gridSizeX", "gsx", om.MFnNumericData.kInt)
         MAKE_INPUT(nAttr)
-        nAttr.default = 100
+        nAttr.default = 50
 
         TerroderNode.aGridSizeZ = nAttr.create("gridSizeZ", "gsz", om.MFnNumericData.kInt)
         MAKE_INPUT(nAttr)
-        nAttr.default = 100
+        nAttr.default = 50
 
         # output
         TerroderNode.aOutputMesh = tAttr.create("outputMesh", "om", om.MFnData.kMesh)
@@ -343,28 +344,28 @@ class TerroderNode(om.MPxNode):
         om.MPxNode.attributeAffects(TerroderNode.aGridSizeX, TerroderNode.aOutputMesh)
         om.MPxNode.attributeAffects(TerroderNode.aGridSizeZ, TerroderNode.aOutputMesh)
 
-        print("TerroderNode initialised.\n")
+        print("[DEBUG] TerroderNode initialised.\n")
     
     @staticmethod
     def create():
         return TerroderNode()
 
 # initialize the script plug-in
-def initializePlugin(mobject):
-    mplugin = om.MFnPlugin(mobject, "Company", "1.0", "Any")
+def initializePlugin(mObject):
+    mPlugin = om.MFnPlugin(mObject, "Company", "1.0", "Any")
     # Don't use try except bc otherwise the error message won't be printed
-    mplugin.registerNode(TerroderNode.TYPE_NAME, TerroderNode.ID, TerroderNode.create, TerroderNode.initialize, om.MPxNode.kDependNode)
+    mPlugin.registerNode(TerroderNode.TYPE_NAME, TerroderNode.ID, TerroderNode.create, TerroderNode.initialize, om.MPxNode.kDependNode)
 
-    melPath = f"{mplugin.loadPath()}/TerroderMenu.mel"
-    if os.path.exists(melPath):
-        mm.eval(f"source \"{melPath}\";")
-        print(f"Loaded the script {melPath}.")
+    menuMelPath = f"{mPlugin.loadPath()}/TerroderMenu.mel"
+    if os.path.exists(menuMelPath):
+        mm.eval(f"source \"{menuMelPath}\";")
+        print(f"Loaded the script {menuMelPath}.")
     else:
-        print(f"Could not find the script in {melPath}.")
+        print(f"Could not find the script in {menuMelPath}.")
 
 # uninitialize the script plug-in
-def uninitializePlugin(mobject):
-    mplugin = om.MFnPlugin(mobject)
+def uninitializePlugin(mObject):
+    mplugin = om.MFnPlugin(mObject)
     # Don't use try except bc otherwise the error message won't be printed
     mplugin.deregisterNode(TerroderNode.ID)
 
