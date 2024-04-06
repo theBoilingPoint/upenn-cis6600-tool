@@ -23,63 +23,82 @@ def MAKE_OUTPUT(attr):
     attr.readable = True
     attr.writable = False
 
-# Give the node a unique ID. Make sure this ID is different from all of your
-# other nodes!
 class TerroderSimulationParameters(object):
+    # Intended to be read-only. If you need to change values, you need a new TerroderSimulationParameters object.
     # All parameters that can be changed by the user
     # Does NOT include time; if time alone changes, we might not need to redo the entire simulation
 
-    def __init__(self):
-        self.cellSize = 0.1
-        self.gridShape = (50, 50)
-        self.upliftScale = 0.01  # scale uplift from [0, 1] to [0, this]
-        self.erosionScale = 0.1
-        self.meanHeightTarget = 0.5  # will be enforced
-        self.meanHeightTargetNumIterations = 50
-        self._upliftMapFile = ""
-        self._cachedUpliftMap = None
-    
+    def __init__(self, cellSize, gridShape, upliftMapFile, relUpliftScale, relErosionScale, meanHeightTarget, meanHeightTargetNumIterations):
+        self._cellSize = cellSize
+        self._gridShape = gridShape
+        self._upliftMapFile = upliftMapFile
+        self._relUpliftScale = relUpliftScale
+        self._relErosionScale = relErosionScale
+        self._meanHeightTarget = meanHeightTarget
+        self._meanHeightTargetNumIterations = meanHeightTargetNumIterations
+        self._upliftMap = None
+
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, TerroderSimulationParameters):
             return False
         
-        return self.upliftMapFile == other.upliftMapFile \
+        return self.cellSize == other.cellSize \
             and self.gridShape == other.gridShape \
-            and abs(self.upliftScale - other.upliftScale) <= 0.0001 \
-            and abs(self.erosionScale - other.erosionScale) <= 0.0001 \
+            and self.upliftMapFile == other.upliftMapFile \
+            and abs(self.relUpliftScale - other.relUpliftScale) <= 0.0001 \
+            and abs(self.relErosionScale - other.relErosionScale) <= 0.0001 \
             and abs(self.meanHeightTarget - other.meanHeightTarget) <= 0.001 \
             and abs(self.meanHeightTargetNumIterations - other.meanHeightTargetNumIterations) <= 0.001
+
+    @property
+    def cellSize(self):
+        return self._cellSize
+    
+    @property
+    def gridShape(self):
+        return self._gridShape
     
     @property
     def upliftMapFile(self):
         return self._upliftMapFile
+
+    @property
+    def relUpliftScale(self):
+        return self._relUpliftScale
     
-    @upliftMapFile.setter
-    def upliftMapFile(self, value):
-        if self._upliftMapFile == value:
-            return
-        
-        self._upliftMapFile = value
-        self._cachedUpliftMap = None
-        try:
-            with Image.open(self.upliftMapFile) as image:
-                gsImage = image.convert('L')  # grayscale
-                step = (float(gsImage.size[0]) / float(self.gridShape[0]), float(gsImage.size[1]) / float(self.gridShape[1]))
-                
-                self._cachedUpliftMap = np.empty(self.gridShape)
-                for i in range(self.gridShape[0]):
-                    for k in range(self.gridShape[1]):
-                        # Interpolate (i, k)
-                        rx, ry = step[0] * i, step[1] * k
-                        self._cachedUpliftMap[i][k] = TerroderSimulationParameters._readInterpolatedUplift(gsImage, (rx, ry))
-            
-            self._cachedUpliftMap = np.clip(self._cachedUpliftMap, 0., 1.)
-        except FileNotFoundError:
-            om.MGlobal.displayWarning(f'File "{value}" not found.')
+    @property
+    def relErosionScale(self):
+        return self._relErosionScale
+    
+    @property
+    def meanHeightTarget(self):
+        return self._meanHeightTarget
+    
+    @property
+    def meanHeightTargetNumIterations(self):
+        return self._meanHeightTargetNumIterations
     
     @property
     def upliftMap(self):
-        return self._cachedUpliftMap if self._cachedUpliftMap is not None else np.full(self.gridShape, 0.5)
+        if self._upliftMap is None:
+            self._upliftMap = np.zeros(self.gridShape)
+            if len(self._upliftMapFile) > 0:
+                try:
+                    with Image.open(self.upliftMapFile) as image:
+                        gsImage = image.convert('L')  # grayscale
+                        step = (float(gsImage.size[0]) / float(self.gridShape[0]), float(gsImage.size[1]) / float(self.gridShape[1]))
+                        
+                        for i in range(self.gridShape[0]):
+                            for k in range(self.gridShape[1]):
+                                # Interpolate (i, k)
+                                rx, ry = step[0] * i, step[1] * k
+                                self._upliftMap[i][k] = TerroderSimulationParameters._readInterpolatedUplift(gsImage, (rx, ry))
+                    
+                    self._upliftMap = np.clip(self._upliftMap, 0., 1.)
+                except FileNotFoundError:
+                    om.MGlobal.displayWarning(f'File "{self.upliftMapFile}" not found.')
+        
+        return self._upliftMap
     
     @staticmethod
     def _readInterpolatedUplift(grayscaleImage: Image, coords):
@@ -113,6 +132,8 @@ class TerroderNode(om.MPxNode):
     DRAIN_AREA_EXPONENT = 1.0
     MIN_HEIGHT = 0.0
     MAX_HEIGHT = 1.0
+    UPLIFT_DEFAULT_SCALE = 0.01
+    EROSION_DEFAULT_SCALE = 0.1
 
     TIME_ATTR_LONG_NAME = "time"
     TIME_ATTR_SHORT_NAME = "t"
@@ -128,6 +149,8 @@ class TerroderNode(om.MPxNode):
     aGridSizeZ = None
     aMeanHeightTarget = None
     aMeanHeightTargetNumIterations = None
+    aUpliftRelScale = None
+    aErosionRelScale = None
 
     # output
     aOutputMesh = None
@@ -169,7 +192,7 @@ class TerroderNode(om.MPxNode):
         TerroderNode.aGridSizeZ = nAttr.create("gridSizeZ", "gsz", om.MFnNumericData.kInt)
         MAKE_INPUT(nAttr)
         nAttr.default = 50
-        nAttr.setMax(4)
+        nAttr.setMin(4)
 
         TerroderNode.aMeanHeightTarget = nAttr.create("meanHeightTarget", "ht", om.MFnNumericData.kFloat)
         MAKE_INPUT(nAttr)
@@ -181,6 +204,16 @@ class TerroderNode(om.MPxNode):
         MAKE_INPUT(nAttr)
         nAttr.default = 50
         nAttr.setMin(1)
+
+        TerroderNode.aUpliftRelScale = nAttr.create("upliftRelativeScale", "urs", om.MFnNumericData.kFloat)
+        MAKE_INPUT(nAttr)
+        nAttr.default = 1.0
+        nAttr.setMin(0.0)
+
+        TerroderNode.aErosionRelScale = nAttr.create("erosionRelativeScale", "ers", om.MFnNumericData.kFloat)
+        MAKE_INPUT(nAttr)
+        nAttr.default = 1.0
+        nAttr.setMin(0.0)
 
         # output
         TerroderNode.aOutputMesh = tAttr.create(TerroderNode.OUTPUT_MESH_ATTR_LONG_NAME, TerroderNode.OUTPUT_MESH_ATTR_SHORT_NAME, om.MFnData.kMesh)
@@ -197,6 +230,8 @@ class TerroderNode(om.MPxNode):
         om.MPxNode.addAttribute(TerroderNode.aMeanHeightTarget)
         om.MPxNode.addAttribute(TerroderNode.aMeanHeightTargetNumIterations)
         om.MPxNode.addAttribute(TerroderNode.aOutputMesh)
+        om.MPxNode.addAttribute(TerroderNode.aUpliftRelScale)
+        om.MPxNode.addAttribute(TerroderNode.aErosionRelScale)
 
         om.MPxNode.attributeAffects(TerroderNode.aTime, TerroderNode.aOutputMesh)
         om.MPxNode.attributeAffects(TerroderNode.aUpliftMapFile, TerroderNode.aOutputMesh)
@@ -205,6 +240,8 @@ class TerroderNode(om.MPxNode):
         om.MPxNode.attributeAffects(TerroderNode.aGridSizeZ, TerroderNode.aOutputMesh)
         om.MPxNode.attributeAffects(TerroderNode.aMeanHeightTarget, TerroderNode.aOutputMesh)
         om.MPxNode.attributeAffects(TerroderNode.aMeanHeightTargetNumIterations, TerroderNode.aOutputMesh)
+        om.MPxNode.attributeAffects(TerroderNode.aUpliftRelScale, TerroderNode.aOutputMesh)
+        om.MPxNode.attributeAffects(TerroderNode.aErosionRelScale, TerroderNode.aOutputMesh)
 
         print("[DEBUG] TerroderNode initialised.\n")
     
@@ -216,12 +253,15 @@ class TerroderNode(om.MPxNode):
         numIterations = max(0, int(rawTime) - 1)
 
         # get the input data
-        newSimParams = TerroderSimulationParameters()
-        newSimParams.upliftMapFile = dataBlock.inputValue(TerroderNode.aUpliftMapFile).asString()
-        newSimParams.cellSize = dataBlock.inputValue(TerroderNode.aCellSize).asFloat()
-        newSimParams.gridShape = (dataBlock.inputValue(TerroderNode.aGridSizeX).asInt(), dataBlock.inputValue(TerroderNode.aGridSizeZ).asInt())
-        newSimParams.meanHeightTarget = dataBlock.inputValue(TerroderNode.aMeanHeightTarget).asFloat()
-        newSimParams.meanHeightTargetNumIterations = dataBlock.inputValue(TerroderNode.aMeanHeightTargetNumIterations).asInt()
+        avUpliftMapFile = dataBlock.inputValue(TerroderNode.aUpliftMapFile).asString()
+        avCellSize = dataBlock.inputValue(TerroderNode.aCellSize).asFloat()
+        avGridShape = (dataBlock.inputValue(TerroderNode.aGridSizeX).asInt(), dataBlock.inputValue(TerroderNode.aGridSizeZ).asInt())
+        avMeanHeightTarget = dataBlock.inputValue(TerroderNode.aMeanHeightTarget).asFloat()
+        avMeanHeightTargetNumIterations = dataBlock.inputValue(TerroderNode.aMeanHeightTargetNumIterations).asInt()
+        avRelUpliftScale = dataBlock.inputValue(TerroderNode.aUpliftRelScale).asFloat()
+        avRelErosionScale = dataBlock.inputValue(TerroderNode.aErosionRelScale).asFloat()
+        newSimParams = TerroderSimulationParameters(avCellSize, avGridShape, avUpliftMapFile, avRelUpliftScale, avRelErosionScale, \
+                                                    avMeanHeightTarget, avMeanHeightTargetNumIterations)
 
         if self.simParams is None or newSimParams != self.simParams:
             # Current sim params are out of date; reset
@@ -273,8 +313,8 @@ class TerroderNode(om.MPxNode):
         erosion = np.power(steepestSlope, TerroderNode.STEEPEST_SLOPE_EXPONENT) * np.power(drainageAreaMap, TerroderNode.DRAIN_AREA_EXPONENT)
 
         nextHeightMap = np.copy(curHeightMap)
-        nextHeightMap += self.simParams.upliftMap * self.simParams.upliftScale
-        nextHeightMap -= erosion * self.simParams.erosionScale
+        nextHeightMap += self.simParams.upliftMap * self.simParams.relUpliftScale * TerroderNode.UPLIFT_DEFAULT_SCALE
+        nextHeightMap -= erosion * self.simParams.relErosionScale * TerroderNode.EROSION_DEFAULT_SCALE
         nextHeightMap = self.applyHeightConstraints(nextHeightMap, len(self.heightMapTs))
         self.heightMapTs.append(nextHeightMap)
     
