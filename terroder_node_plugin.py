@@ -1,5 +1,6 @@
 import os
 
+import math
 import maya.api.OpenMaya as om
 import maya.cmds as cmds
 import maya.mel as mm
@@ -28,7 +29,8 @@ class TerroderSimulationParameters(object):
     # All parameters that can be changed by the user
     # Does NOT include time; if time alone changes, we might not need to redo the entire simulation
 
-    def __init__(self, cellSize, gridShape, upliftMapFile, relUpliftScale, relErosionScale, meanHeightTarget, meanHeightTargetNumIterations):
+    def __init__(self, cellSize, gridShape, upliftMapFile, meanHeightTarget, meanHeightTargetNumIterations, \
+                 relUpliftScale, relErosionScale):
         self._cellSize = cellSize
         self._gridShape = gridShape
         self._upliftMapFile = upliftMapFile
@@ -45,10 +47,10 @@ class TerroderSimulationParameters(object):
         return self.cellSize == other.cellSize \
             and self.gridShape == other.gridShape \
             and self.upliftMapFile == other.upliftMapFile \
-            and abs(self.relUpliftScale - other.relUpliftScale) <= 0.0001 \
-            and abs(self.relErosionScale - other.relErosionScale) <= 0.0001 \
-            and abs(self.meanHeightTarget - other.meanHeightTarget) <= 0.001 \
-            and abs(self.meanHeightTargetNumIterations - other.meanHeightTargetNumIterations) <= 0.001
+            and math.isclose(self.meanHeightTarget, other.meanHeightTarget) \
+            and math.isclose(self.meanHeightTargetNumIterations, other.meanHeightTargetNumIterations) \
+            and math.isclose(self.relUpliftScale, other.relUpliftScale) \
+            and math.isclose(self.relErosionScale, other.relErosionScale)
 
     @property
     def cellSize(self):
@@ -260,8 +262,9 @@ class TerroderNode(om.MPxNode):
         avMeanHeightTargetNumIterations = dataBlock.inputValue(TerroderNode.aMeanHeightTargetNumIterations).asInt()
         avRelUpliftScale = dataBlock.inputValue(TerroderNode.aUpliftRelScale).asFloat()
         avRelErosionScale = dataBlock.inputValue(TerroderNode.aErosionRelScale).asFloat()
-        newSimParams = TerroderSimulationParameters(avCellSize, avGridShape, avUpliftMapFile, avRelUpliftScale, avRelErosionScale, \
-                                                    avMeanHeightTarget, avMeanHeightTargetNumIterations)
+        newSimParams = TerroderSimulationParameters(avCellSize, avGridShape, avUpliftMapFile, \
+                                                    avMeanHeightTarget, avMeanHeightTargetNumIterations, \
+                                                    avRelUpliftScale, avRelErosionScale)
 
         if self.simParams is None or newSimParams != self.simParams:
             # Current sim params are out of date; reset
@@ -319,11 +322,7 @@ class TerroderNode(om.MPxNode):
         self.heightMapTs.append(nextHeightMap)
     
     def makeInitialHeightMap(self) -> np.ndarray:
-        shape = self.simParams.gridShape
-        flatMid = np.full(shape, self.simParams.meanHeightTarget)
-        randomness = (2. * np.random.random_sample(shape) - 1.) * self.simParams.cellSize
-        heightMap = flatMid + randomness
-        return self.applyHeightConstraints(heightMap, 0)
+        return np.full(self.simParams.gridShape, self.simParams.meanHeightTarget)
 
     def applyHeightConstraints(self, heightMap: np.ndarray, numIterations: int) -> np.ndarray:
         # for mean height targeting
@@ -357,9 +356,9 @@ class TerroderNode(om.MPxNode):
                 di, dk = ni - i, nk - k
                 relFlow = pow((h - nh) / np.sqrt(di * di + dk * dk), 4) # only need to compute proportionally due to normalization later
                 relFlows[(ni, nk)] = relFlow
-                totalRelFlow += 1
+                totalRelFlow += relFlow
 
-            if len(relFlows) == 0 or totalRelFlow < 0.001:
+            if len(relFlows) == 0:
                 continue
 
             for ni, nk in relFlows:
@@ -414,14 +413,6 @@ class TerroderNode(om.MPxNode):
             if self.cellInBounds((ni, nk)):
                 neighborCells.append((ni, nk))
         return neighborCells
-
-    # ROUGHLY from https://stackoverflow.com/a/76686523
-    # TODO: inspect for correctness
-    def makeHeightMapLaplacian(self, heightMap):
-        grad_x, grad_z = np.gradient(heightMap, self.xStep, self.zStep)
-        grad_xx = np.gradient(grad_x, self.xStep, axis=0)
-        grad_zz = np.gradient(grad_z, self.zStep, axis=1)
-        return grad_xx + grad_zz
 
 
     
