@@ -7,6 +7,7 @@ import maya.mel as mm
 
 import numpy as np
 from PIL import Image
+from typing import Tuple
 
 # USE PYTHON API 2.0
 maya_useNewAPI = True
@@ -29,22 +30,29 @@ class TerroderSimulationParameters(object):
     # All parameters that can be changed by the user
     # Does NOT include time; if time alone changes, we might not need to redo the entire simulation
 
-    def __init__(self, cellSize, gridShape, upliftMapFile, relUpliftScale, relErosionScale, waterHalfRetentionDist):
+    def __init__(self, cellSize: float, targetGridScale: Tuple[float, float], upliftMapFile: str, 
+                 minUpliftRatio: float, relUpliftScale: float, relErosionScale: float, waterHalfRetentionDist: float):
         self._cellSize = cellSize
-        self._gridShape = gridShape
+        self._targetGridScale = targetGridScale
         self._upliftMapFile = upliftMapFile
+        self._minUpliftRatio = minUpliftRatio
         self._relUpliftScale = relUpliftScale
         self._relErosionScale = relErosionScale
         self._waterHalfRetentionDist = waterHalfRetentionDist
         self._upliftMap = None
 
+        gridShapeX = max(int(math.ceil(self._targetGridScale[0] / self.cellSize)), 4)
+        gridShapeZ = max(int(math.ceil(self._targetGridScale[1] / self.cellSize)), 4)
+        self.gridShape = (gridShapeX, gridShapeZ)
+
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, TerroderSimulationParameters):
             return False
         
-        return self.cellSize == other.cellSize \
+        return math.isclose(self.cellSize, other.cellSize) \
             and self.gridShape == other.gridShape \
             and self.upliftMapFile == other.upliftMapFile \
+            and math.isclose(self.minUpliftRatio, other.minUpliftRatio) \
             and math.isclose(self.relUpliftScale, other.relUpliftScale) \
             and math.isclose(self.relErosionScale, other.relErosionScale) \
             and math.isclose(self.waterHalfRetentionDist, other.waterHalfRetentionDist)
@@ -54,12 +62,12 @@ class TerroderSimulationParameters(object):
         return self._cellSize
     
     @property
-    def gridShape(self):
-        return self._gridShape
-    
-    @property
     def upliftMapFile(self):
         return self._upliftMapFile
+
+    @property
+    def minUpliftRatio(self):
+        return self._minUpliftRatio
 
     @property
     def relUpliftScale(self):
@@ -72,7 +80,7 @@ class TerroderSimulationParameters(object):
     @property
     def waterHalfRetentionDist(self):
         return self._waterHalfRetentionDist
-    
+
     @property
     def upliftMap(self):
         if self._upliftMap is None:
@@ -88,7 +96,8 @@ class TerroderSimulationParameters(object):
                                 # Interpolate (i, k)
                                 rx, ry = step[0] * i, step[1] * k
                                 self._upliftMap[i][k] = TerroderSimulationParameters._readInterpolatedUplift(gsImage, (rx, ry))
-                    
+
+                    self._upliftMap = self.minUpliftRatio + (1.0 - self.minUpliftRatio) * self._upliftMap
                     self._upliftMap = np.clip(self._upliftMap, 0., 1.)
                 except FileNotFoundError:
                     om.MGlobal.displayWarning(f'File "{self.upliftMapFile}" not found.')
@@ -108,7 +117,8 @@ class TerroderSimulationParameters(object):
 
                 weight = max(0, (1 - abs(fx + dx - x)) * (1 - abs(fy + dy - y)))
                 weights.append(weight)
-                uplifts.append(grayscaleImage.getpixel((fx + dx, fy + dy)))
+                color = grayscaleImage.getpixel((fx + dx, fy + dy))
+                uplifts.append(color / 255.0)
         
         totalWeight = sum(weights)
         if totalWeight <= 0:
@@ -139,9 +149,10 @@ class TerroderNode(om.MPxNode):
     # input
     aTime = None
     aUpliftMapFile = None
+    aMinUpliftRatio = None
     aCellSize = None
-    aGridSizeX = None
-    aGridSizeZ = None
+    aGridScaleX = None
+    aGridScaleZ = None
     aUpliftRelScale = None
     aErosionRelScale = None
     aWaterHalfRetentionDistance = None
@@ -173,20 +184,26 @@ class TerroderNode(om.MPxNode):
         MAKE_INPUT(tAttr)
         tAttr.usedAsFilename = True
 
+        TerroderNode.aMinUpliftRatio = nAttr.create("minUpliftRatio", "mur", om.MFnNumericData.kFloat)
+        MAKE_INPUT(nAttr)
+        nAttr.default = 0.1
+        nAttr.setMin(0.0)
+        nAttr.setMax(0.999)
+
         TerroderNode.aCellSize = nAttr.create("cellSize", "cs", om.MFnNumericData.kFloat)
         MAKE_INPUT(nAttr)
         nAttr.default = 0.1
         nAttr.setMin(0.001)
 
-        TerroderNode.aGridSizeX = nAttr.create("gridSizeX", "gsx", om.MFnNumericData.kInt)
+        TerroderNode.aGridScaleX = nAttr.create("gridScaleX", "sx", om.MFnNumericData.kFloat)
         MAKE_INPUT(nAttr)
-        nAttr.default = 50
-        nAttr.setMin(4)
+        nAttr.default = 5.0
+        nAttr.setMin(0.01)
 
-        TerroderNode.aGridSizeZ = nAttr.create("gridSizeZ", "gsz", om.MFnNumericData.kInt)
+        TerroderNode.aGridScaleZ = nAttr.create("gridScaleZ", "sz", om.MFnNumericData.kFloat)
         MAKE_INPUT(nAttr)
-        nAttr.default = 50
-        nAttr.setMin(4)
+        nAttr.default = 5.0
+        nAttr.setMin(0.01)
 
         TerroderNode.aUpliftRelScale = nAttr.create("upliftRelativeScale", "urs", om.MFnNumericData.kFloat)
         MAKE_INPUT(nAttr)
@@ -212,9 +229,10 @@ class TerroderNode(om.MPxNode):
         # Don't do try/except here, otherwise the error message won't be printed
         om.MPxNode.addAttribute(TerroderNode.aTime)
         om.MPxNode.addAttribute(TerroderNode.aUpliftMapFile)
+        om.MPxNode.addAttribute(TerroderNode.aMinUpliftRatio)
         om.MPxNode.addAttribute(TerroderNode.aCellSize)
-        om.MPxNode.addAttribute(TerroderNode.aGridSizeX)
-        om.MPxNode.addAttribute(TerroderNode.aGridSizeZ)
+        om.MPxNode.addAttribute(TerroderNode.aGridScaleX)
+        om.MPxNode.addAttribute(TerroderNode.aGridScaleZ)
         om.MPxNode.addAttribute(TerroderNode.aOutputMesh)
         om.MPxNode.addAttribute(TerroderNode.aUpliftRelScale)
         om.MPxNode.addAttribute(TerroderNode.aErosionRelScale)
@@ -222,9 +240,10 @@ class TerroderNode(om.MPxNode):
 
         om.MPxNode.attributeAffects(TerroderNode.aTime, TerroderNode.aOutputMesh)
         om.MPxNode.attributeAffects(TerroderNode.aUpliftMapFile, TerroderNode.aOutputMesh)
+        om.MPxNode.attributeAffects(TerroderNode.aMinUpliftRatio, TerroderNode.aOutputMesh)
         om.MPxNode.attributeAffects(TerroderNode.aCellSize, TerroderNode.aOutputMesh)
-        om.MPxNode.attributeAffects(TerroderNode.aGridSizeX, TerroderNode.aOutputMesh)
-        om.MPxNode.attributeAffects(TerroderNode.aGridSizeZ, TerroderNode.aOutputMesh)
+        om.MPxNode.attributeAffects(TerroderNode.aGridScaleX, TerroderNode.aOutputMesh)
+        om.MPxNode.attributeAffects(TerroderNode.aGridScaleZ, TerroderNode.aOutputMesh)
         om.MPxNode.attributeAffects(TerroderNode.aUpliftRelScale, TerroderNode.aOutputMesh)
         om.MPxNode.attributeAffects(TerroderNode.aErosionRelScale, TerroderNode.aOutputMesh)
         om.MPxNode.attributeAffects(TerroderNode.aWaterHalfRetentionDistance, TerroderNode.aOutputMesh)
@@ -240,12 +259,14 @@ class TerroderNode(om.MPxNode):
 
         # get the input data
         avUpliftMapFile = dataBlock.inputValue(TerroderNode.aUpliftMapFile).asString()
+        avMinUpliftRatio = dataBlock.inputValue(TerroderNode.aMinUpliftRatio).asFloat()
         avCellSize = dataBlock.inputValue(TerroderNode.aCellSize).asFloat()
-        avGridShape = (dataBlock.inputValue(TerroderNode.aGridSizeX).asInt(), dataBlock.inputValue(TerroderNode.aGridSizeZ).asInt())
+        avGridScale = (dataBlock.inputValue(TerroderNode.aGridScaleX).asFloat(), dataBlock.inputValue(TerroderNode.aGridScaleZ).asFloat())
         avRelUpliftScale = dataBlock.inputValue(TerroderNode.aUpliftRelScale).asFloat()
         avRelErosionScale = dataBlock.inputValue(TerroderNode.aErosionRelScale).asFloat()
         avWaterHalfRetentionDist = dataBlock.inputValue(TerroderNode.aErosionRelScale).asFloat()
-        newSimParams = TerroderSimulationParameters(avCellSize, avGridShape, avUpliftMapFile, avRelUpliftScale, avRelErosionScale, avWaterHalfRetentionDist)
+        newSimParams = TerroderSimulationParameters(avCellSize, avGridScale, avUpliftMapFile, avMinUpliftRatio, 
+                                                    avRelUpliftScale, avRelErosionScale, avWaterHalfRetentionDist)
 
         if self.simParams is None or newSimParams != self.simParams:
             # Current sim params are out of date; reset
@@ -288,6 +309,8 @@ class TerroderNode(om.MPxNode):
         nextHeightMap = np.clip(nextHeightMap, TerroderNode.MIN_HEIGHT, TerroderNode.MAX_HEIGHT)
         self.heightMapTs.append(nextHeightMap)
     
+
+
     def makeInitialHeightMap(self) -> np.ndarray:
         return np.zeros(self.simParams.gridShape)
     
