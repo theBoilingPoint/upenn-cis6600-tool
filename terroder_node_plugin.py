@@ -29,15 +29,13 @@ class TerroderSimulationParameters(object):
     # All parameters that can be changed by the user
     # Does NOT include time; if time alone changes, we might not need to redo the entire simulation
 
-    def __init__(self, cellSize, gridShape, upliftMapFile, meanHeightTarget, meanHeightTargetNumIterations, \
-                 relUpliftScale, relErosionScale):
+    def __init__(self, cellSize, gridShape, upliftMapFile, relUpliftScale, relErosionScale, waterHalfRetentionDist):
         self._cellSize = cellSize
         self._gridShape = gridShape
         self._upliftMapFile = upliftMapFile
         self._relUpliftScale = relUpliftScale
         self._relErosionScale = relErosionScale
-        self._meanHeightTarget = meanHeightTarget
-        self._meanHeightTargetNumIterations = meanHeightTargetNumIterations
+        self._waterHalfRetentionDist = waterHalfRetentionDist
         self._upliftMap = None
 
     def __eq__(self, other: object) -> bool:
@@ -47,10 +45,9 @@ class TerroderSimulationParameters(object):
         return self.cellSize == other.cellSize \
             and self.gridShape == other.gridShape \
             and self.upliftMapFile == other.upliftMapFile \
-            and math.isclose(self.meanHeightTarget, other.meanHeightTarget) \
-            and math.isclose(self.meanHeightTargetNumIterations, other.meanHeightTargetNumIterations) \
             and math.isclose(self.relUpliftScale, other.relUpliftScale) \
-            and math.isclose(self.relErosionScale, other.relErosionScale)
+            and math.isclose(self.relErosionScale, other.relErosionScale) \
+            and math.isclose(self.waterHalfRetentionDist, other.waterHalfRetentionDist)
 
     @property
     def cellSize(self):
@@ -73,12 +70,8 @@ class TerroderSimulationParameters(object):
         return self._relErosionScale
     
     @property
-    def meanHeightTarget(self):
-        return self._meanHeightTarget
-    
-    @property
-    def meanHeightTargetNumIterations(self):
-        return self._meanHeightTargetNumIterations
+    def waterHalfRetentionDist(self):
+        return self._waterHalfRetentionDist
     
     @property
     def upliftMap(self):
@@ -149,10 +142,9 @@ class TerroderNode(om.MPxNode):
     aCellSize = None
     aGridSizeX = None
     aGridSizeZ = None
-    aMeanHeightTarget = None
-    aMeanHeightTargetNumIterations = None
     aUpliftRelScale = None
     aErosionRelScale = None
+    aWaterHalfRetentionDistance = None
 
     # output
     aOutputMesh = None
@@ -196,17 +188,6 @@ class TerroderNode(om.MPxNode):
         nAttr.default = 50
         nAttr.setMin(4)
 
-        TerroderNode.aMeanHeightTarget = nAttr.create("meanHeightTarget", "ht", om.MFnNumericData.kFloat)
-        MAKE_INPUT(nAttr)
-        nAttr.default = 0.5
-        nAttr.setMin(0.0)
-        nAttr.setMax(1.0)
-
-        TerroderNode.aMeanHeightTargetNumIterations = nAttr.create("meanHeightTargetNumIterations", "hti", om.MFnNumericData.kInt)
-        MAKE_INPUT(nAttr)
-        nAttr.default = 50
-        nAttr.setMin(1)
-
         TerroderNode.aUpliftRelScale = nAttr.create("upliftRelativeScale", "urs", om.MFnNumericData.kFloat)
         MAKE_INPUT(nAttr)
         nAttr.default = 1.0
@@ -216,6 +197,11 @@ class TerroderNode(om.MPxNode):
         MAKE_INPUT(nAttr)
         nAttr.default = 1.0
         nAttr.setMin(0.0)
+
+        TerroderNode.aWaterHalfRetentionDistance = nAttr.create("waterHalfRetentionDistance", "whr", om.MFnNumericData.kFloat)
+        MAKE_INPUT(nAttr)
+        nAttr.default = 1.0
+        nAttr.setMin(0.001)
 
         # output
         TerroderNode.aOutputMesh = tAttr.create(TerroderNode.OUTPUT_MESH_ATTR_LONG_NAME, TerroderNode.OUTPUT_MESH_ATTR_SHORT_NAME, om.MFnData.kMesh)
@@ -229,21 +215,19 @@ class TerroderNode(om.MPxNode):
         om.MPxNode.addAttribute(TerroderNode.aCellSize)
         om.MPxNode.addAttribute(TerroderNode.aGridSizeX)
         om.MPxNode.addAttribute(TerroderNode.aGridSizeZ)
-        om.MPxNode.addAttribute(TerroderNode.aMeanHeightTarget)
-        om.MPxNode.addAttribute(TerroderNode.aMeanHeightTargetNumIterations)
         om.MPxNode.addAttribute(TerroderNode.aOutputMesh)
         om.MPxNode.addAttribute(TerroderNode.aUpliftRelScale)
         om.MPxNode.addAttribute(TerroderNode.aErosionRelScale)
+        om.MPxNode.addAttribute(TerroderNode.aWaterHalfRetentionDistance)
 
         om.MPxNode.attributeAffects(TerroderNode.aTime, TerroderNode.aOutputMesh)
         om.MPxNode.attributeAffects(TerroderNode.aUpliftMapFile, TerroderNode.aOutputMesh)
         om.MPxNode.attributeAffects(TerroderNode.aCellSize, TerroderNode.aOutputMesh)
         om.MPxNode.attributeAffects(TerroderNode.aGridSizeX, TerroderNode.aOutputMesh)
         om.MPxNode.attributeAffects(TerroderNode.aGridSizeZ, TerroderNode.aOutputMesh)
-        om.MPxNode.attributeAffects(TerroderNode.aMeanHeightTarget, TerroderNode.aOutputMesh)
-        om.MPxNode.attributeAffects(TerroderNode.aMeanHeightTargetNumIterations, TerroderNode.aOutputMesh)
         om.MPxNode.attributeAffects(TerroderNode.aUpliftRelScale, TerroderNode.aOutputMesh)
         om.MPxNode.attributeAffects(TerroderNode.aErosionRelScale, TerroderNode.aOutputMesh)
+        om.MPxNode.attributeAffects(TerroderNode.aWaterHalfRetentionDistance, TerroderNode.aOutputMesh)
 
         print("[DEBUG] TerroderNode initialised.\n")
     
@@ -258,13 +242,10 @@ class TerroderNode(om.MPxNode):
         avUpliftMapFile = dataBlock.inputValue(TerroderNode.aUpliftMapFile).asString()
         avCellSize = dataBlock.inputValue(TerroderNode.aCellSize).asFloat()
         avGridShape = (dataBlock.inputValue(TerroderNode.aGridSizeX).asInt(), dataBlock.inputValue(TerroderNode.aGridSizeZ).asInt())
-        avMeanHeightTarget = dataBlock.inputValue(TerroderNode.aMeanHeightTarget).asFloat()
-        avMeanHeightTargetNumIterations = dataBlock.inputValue(TerroderNode.aMeanHeightTargetNumIterations).asInt()
         avRelUpliftScale = dataBlock.inputValue(TerroderNode.aUpliftRelScale).asFloat()
         avRelErosionScale = dataBlock.inputValue(TerroderNode.aErosionRelScale).asFloat()
-        newSimParams = TerroderSimulationParameters(avCellSize, avGridShape, avUpliftMapFile, \
-                                                    avMeanHeightTarget, avMeanHeightTargetNumIterations, \
-                                                    avRelUpliftScale, avRelErosionScale)
+        avWaterHalfRetentionDist = dataBlock.inputValue(TerroderNode.aErosionRelScale).asFloat()
+        newSimParams = TerroderSimulationParameters(avCellSize, avGridShape, avUpliftMapFile, avRelUpliftScale, avRelErosionScale, avWaterHalfRetentionDist)
 
         if self.simParams is None or newSimParams != self.simParams:
             # Current sim params are out of date; reset
@@ -294,12 +275,29 @@ class TerroderNode(om.MPxNode):
         
         # Compute steepest slope to a lower neighbor
         curHeightMap = self.heightMapTs[-1]
-        steepestSlope = np.zeros(self.simParams.gridShape)  # 0 if no lower neighbor
+        steepestSlopeMap = self.computeSteepestSlopeMap(curHeightMap)
+
+        drainageAreaMap = self.computeDrainageAreaMap(curHeightMap)
+
+        # Equals 1 at steepest slope 1 and drain area 1
+        erosion = np.power(steepestSlopeMap, TerroderNode.STEEPEST_SLOPE_EXPONENT) * np.power(drainageAreaMap, TerroderNode.DRAIN_AREA_EXPONENT)
+
+        nextHeightMap = np.copy(curHeightMap)
+        nextHeightMap += self.simParams.upliftMap * self.simParams.relUpliftScale * TerroderNode.UPLIFT_DEFAULT_SCALE
+        nextHeightMap -= erosion * self.simParams.relErosionScale * TerroderNode.EROSION_DEFAULT_SCALE
+        nextHeightMap = np.clip(nextHeightMap, TerroderNode.MIN_HEIGHT, TerroderNode.MAX_HEIGHT)
+        self.heightMapTs.append(nextHeightMap)
+    
+    def makeInitialHeightMap(self) -> np.ndarray:
+        return np.zeros(self.simParams.gridShape)
+    
+    def computeSteepestSlopeMap(self, heightMap) -> np.ndarray:
+        steepestSlopeMap = np.zeros(self.simParams.gridShape)  # 0 if no lower neighbor
         for i in range(self.simParams.gridShape[0]):
             for k in range(self.simParams.gridShape[1]):
-                height = curHeightMap[i][k]
+                height = heightMap[i][k]
                 for ni, nk in self.getNeighborCells((i, k)):
-                    neighborHeight = curHeightMap[ni][nk]
+                    neighborHeight = heightMap[ni][nk] if self.cellInBounds((ni, nk)) else 0.0
                     if neighborHeight >= height:
                         continue
 
@@ -307,32 +305,10 @@ class TerroderNode(om.MPxNode):
                     zDist = (nk - k) * self.simParams.cellSize
                     neighborDist = np.sqrt(xDist * xDist + zDist * zDist)
                     slope = (height - neighborHeight) / neighborDist
-                    if slope > steepestSlope[i][k]:
-                        steepestSlope[i][k] = slope
-
-        drainageAreaMap = self.computeDrainageAreaMap(curHeightMap)
-
-        # Equals 1 at steepest slope 1 and drain area 1
-        erosion = np.power(steepestSlope, TerroderNode.STEEPEST_SLOPE_EXPONENT) * np.power(drainageAreaMap, TerroderNode.DRAIN_AREA_EXPONENT)
-
-        nextHeightMap = np.copy(curHeightMap)
-        nextHeightMap += self.simParams.upliftMap * self.simParams.relUpliftScale * TerroderNode.UPLIFT_DEFAULT_SCALE
-        nextHeightMap -= erosion * self.simParams.relErosionScale * TerroderNode.EROSION_DEFAULT_SCALE
-        nextHeightMap = self.applyHeightConstraints(nextHeightMap, len(self.heightMapTs))
-        self.heightMapTs.append(nextHeightMap)
-    
-    def makeInitialHeightMap(self) -> np.ndarray:
-        return np.full(self.simParams.gridShape, self.simParams.meanHeightTarget)
-
-    def applyHeightConstraints(self, heightMap: np.ndarray, numIterations: int) -> np.ndarray:
-        # for mean height targeting
-        numIterationsLeftForTargeting = max(0, self.simParams.meanHeightTargetNumIterations - numIterations)
-        correctionFraction = 1.0 / (float(numIterationsLeftForTargeting) + 1.0)
-        targetHeightDiff = self.simParams.meanHeightTarget - np.mean(heightMap)
-        newHeightMap = heightMap + correctionFraction * targetHeightDiff
-
-        newHeightMap = np.clip(newHeightMap, TerroderNode.MIN_HEIGHT, TerroderNode.MAX_HEIGHT)
-        return newHeightMap
+                    if slope > steepestSlopeMap[i][k]:
+                        steepestSlopeMap[i][k] = slope
+        
+        return steepestSlopeMap
 
     # populates self.drainageArea
     def computeDrainageAreaMap(self, heightMap) -> np.ndarray:
@@ -349,7 +325,7 @@ class TerroderNode(om.MPxNode):
             relFlows = {}
             totalRelFlow = 0.0
             for ni, nk in neighborCells:
-                nh = heightMap[ni][nk]
+                nh = heightMap[ni][nk] if self.cellInBounds((ni, nk)) else 0.0
                 if nh >= h:
                     continue
                 
@@ -362,7 +338,12 @@ class TerroderNode(om.MPxNode):
                 continue
 
             for ni, nk in relFlows:
-                drainageAreaMap[ni][nk] += drainageAreaMap[i][k] * relFlows[(ni, nk)] / totalRelFlow
+                if self.cellInBounds((ni, nk)):
+                    xDist = (ni - i) * self.simParams.cellSize
+                    zDist = (nk - k) * self.simParams.cellSize
+                    neighborDist = np.sqrt(xDist * xDist + zDist * zDist)
+                    retention = np.power(0.5, neighborDist / self.simParams.waterHalfRetentionDist)
+                    drainageAreaMap[ni][nk] += drainageAreaMap[i][k] * relFlows[(ni, nk)] / totalRelFlow * retention
 
         return drainageAreaMap
 
@@ -406,14 +387,7 @@ class TerroderNode(om.MPxNode):
         return 0 <= cell[0] < self.simParams.gridShape[0] and 0 <= cell[1] < self.simParams.gridShape[1]
     
     def getNeighborCells(self, cell):
-        neighborCells = []
-        i, k = cell
-        for di, dk in TerroderNode.NEIGHBOR_ORDER:
-            ni, nk = i + di, k + dk
-            if self.cellInBounds((ni, nk)):
-                neighborCells.append((ni, nk))
-        return neighborCells
-
+        return [(cell[0] + di, cell[1] + dk) for (di, dk) in TerroderNode.NEIGHBOR_ORDER]
 
     
 class TerroderUI(object):
