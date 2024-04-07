@@ -157,6 +157,8 @@ class TerroderNode(om.MPxNode):
     aErosionRelScale = None
     aWaterHalfRetentionDistance = None
 
+    simulateFromTimestamp = None
+
     # output
     aOutputMesh = None
 
@@ -220,6 +222,10 @@ class TerroderNode(om.MPxNode):
         nAttr.default = 1.0
         nAttr.setMin(0.001)
 
+        TerroderNode.simulateFromTimestamp = nAttr.create("simulateFromTimestamp", "sft", om.MFnNumericData.kBoolean)
+        MAKE_INPUT(nAttr)
+        nAttr.default = False
+
         # output
         TerroderNode.aOutputMesh = tAttr.create(TerroderNode.OUTPUT_MESH_ATTR_LONG_NAME, TerroderNode.OUTPUT_MESH_ATTR_SHORT_NAME, om.MFnData.kMesh)
         MAKE_OUTPUT(tAttr)
@@ -237,6 +243,7 @@ class TerroderNode(om.MPxNode):
         om.MPxNode.addAttribute(TerroderNode.aUpliftRelScale)
         om.MPxNode.addAttribute(TerroderNode.aErosionRelScale)
         om.MPxNode.addAttribute(TerroderNode.aWaterHalfRetentionDistance)
+        om.MPxNode.addAttribute(TerroderNode.simulateFromTimestamp)
 
         om.MPxNode.attributeAffects(TerroderNode.aTime, TerroderNode.aOutputMesh)
         om.MPxNode.attributeAffects(TerroderNode.aUpliftMapFile, TerroderNode.aOutputMesh)
@@ -247,6 +254,7 @@ class TerroderNode(om.MPxNode):
         om.MPxNode.attributeAffects(TerroderNode.aUpliftRelScale, TerroderNode.aOutputMesh)
         om.MPxNode.attributeAffects(TerroderNode.aErosionRelScale, TerroderNode.aOutputMesh)
         om.MPxNode.attributeAffects(TerroderNode.aWaterHalfRetentionDistance, TerroderNode.aOutputMesh)
+        om.MPxNode.attributeAffects(TerroderNode.simulateFromTimestamp, TerroderNode.aOutputMesh)
 
         print("[DEBUG] TerroderNode initialised.\n")
     
@@ -267,12 +275,16 @@ class TerroderNode(om.MPxNode):
         avWaterHalfRetentionDist = dataBlock.inputValue(TerroderNode.aErosionRelScale).asFloat()
         newSimParams = TerroderSimulationParameters(avCellSize, avGridScale, avUpliftMapFile, avMinUpliftRatio, 
                                                     avRelUpliftScale, avRelErosionScale, avWaterHalfRetentionDist)
+        startFromTimestamp = dataBlock.inputValue(TerroderNode.simulateFromTimestamp).asBool()
 
         if self.simParams is None or newSimParams != self.simParams:
             # Current sim params are out of date; reset
             om.MGlobal.displayInfo("[DEBUG] Using new sim params and resetting simulation")
             self.simParams = newSimParams
-            self.heightMapTs = []
+            if startFromTimestamp:
+                self.heightMapTs = [self.heightMapTs[int(rawTime)]]
+            else:
+                self.heightMapTs = []
 
         # Simulate until we have at least numIters iterations
         while numIterations >= len(self.heightMapTs):
@@ -421,7 +433,7 @@ class TerroderUI(object):
     def createMenu():
         mainWindowName = mm.eval('string $temp = $gMainWindow;')
         TerroderUI.createdMenuName = cmds.menu(l="Terroder", p=mainWindowName)
-        invokeMenuItemName = cmds.menuItem(l="Create Terroder Mesh", p=TerroderUI.createdMenuName, c=TerroderUI._invokeCommand)
+        cmds.menuItem(l="Create Terroder Mesh", p=TerroderUI.createdMenuName, c=TerroderUI._createNode)
 
     @staticmethod
     def destroyMenu():
@@ -429,7 +441,7 @@ class TerroderUI(object):
         createdMenuName = ""
     
     @staticmethod
-    def _invokeCommand(*args) -> None:
+    def _createNode(*args) -> None:
         transformNodeName = cmds.createNode("transform")
         visibleMeshNodeName = cmds.createNode("mesh", parent=transformNodeName)
         cmds.sets(visibleMeshNodeName, add="initialShadingGroup")
