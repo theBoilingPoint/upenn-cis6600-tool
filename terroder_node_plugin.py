@@ -272,7 +272,7 @@ class TerroderNode(om.MPxNode):
         avGridScale = (dataBlock.inputValue(TerroderNode.aGridScaleX).asFloat(), dataBlock.inputValue(TerroderNode.aGridScaleZ).asFloat())
         avRelUpliftScale = dataBlock.inputValue(TerroderNode.aUpliftRelScale).asFloat()
         avRelErosionScale = dataBlock.inputValue(TerroderNode.aErosionRelScale).asFloat()
-        avWaterHalfRetentionDist = dataBlock.inputValue(TerroderNode.aErosionRelScale).asFloat()
+        avWaterHalfRetentionDist = dataBlock.inputValue(TerroderNode.aWaterHalfRetentionDistance).asFloat()
         newSimParams = TerroderSimulationParameters(avCellSize, avGridScale, avUpliftMapFile, avMinUpliftRatio, 
                                                     avRelUpliftScale, avRelErosionScale, avWaterHalfRetentionDist)
         startFromTimestamp = dataBlock.inputValue(TerroderNode.simulateFromTimestamp).asBool()
