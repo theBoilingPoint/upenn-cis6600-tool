@@ -116,7 +116,6 @@ class TerroderSimulationParameters(object):
     @property
     def upliftMap(self) -> np.ndarray:
         if self._upliftMap is None:
-
             if len(self._upliftMapFile) > 0:
                 try:
                     with Image.open(self.upliftMapFile) as image:
@@ -133,6 +132,8 @@ class TerroderSimulationParameters(object):
                 except FileNotFoundError:
                     om.MGlobal.displayWarning(f'File "{self.upliftMapFile}" not found.')
                     self._upliftMap = np.zeros(self.gridShape)
+            else:
+                self._upliftMap = np.zeros(self.gridShape)
         
         return self._upliftMap
     
