@@ -373,10 +373,11 @@ class TerroderNode(om.MPxNode):
             om.MGlobal.displayInfo("[DEBUG] Using new sim params and resetting simulation")
             self.simParams = newSimParams
             if TerroderNode.retrievedHeightMap is not None:
-                if self.simParams.gridShape != TerroderNode.retrievedHeightMap.shape:
-                    self.heightMapTs = [cv2.resize(TerroderNode.retrievedHeightMap, self.simParams.gridShape)]
-                else:    
-                    self.heightMapTs = [TerroderNode.retrievedHeightMap]
+                self.heightMapTs = [cv2.resize(TerroderNode.retrievedHeightMap, self.simParams.gridShape)]
+                # if self.simParams.gridShape != TerroderNode.retrievedHeightMap.shape:
+                #     self.heightMapTs = [cv2.resize(TerroderNode.retrievedHeightMap, self.simParams.gridShape)]
+                # else:    
+                #     self.heightMapTs = [TerroderNode.retrievedHeightMap]
             else:
                 self.heightMapTs = []
 
@@ -516,6 +517,10 @@ class TerroderNode(om.MPxNode):
     def getNeighborCells(self, cell: Tuple[int, int]) -> list:
         return [(cell[0] + di, cell[1] + dk) for (di, dk) in TerroderNode.NEIGHBOR_ORDER]
     
+    @staticmethod
+    def getSavedHeightMaps():
+        return TerroderNode.savedHeightMaps
+    
     
 class TerroderUI(object):
     """
@@ -611,6 +616,11 @@ class TerroderUI(object):
         TerroderUI._toggleNodeAttribute("startNewSimulation")
 
     @staticmethod
+    def _loadAllSavedHeightMaps(*args) -> None:
+        for key in TerroderNode.getSavedHeightMaps().keys():
+            cmds.textScrollList(TerroderUI.scrollListName, edit=True, append={key})
+
+    @staticmethod
     def _createSavePointWindow(*args) -> None:
         if (cmds.window("savePointWindow", exists=True)):
             cmds.deleteUI("savePointWindow")
@@ -624,8 +634,8 @@ class TerroderUI(object):
         cmds.paneLayout()
         TerroderUI.scrollListName = cmds.textScrollList( numberOfRows=8, allowMultiSelection=True, showIndexedItem=4 )
         cmds.setParent( '..' )
-
- 
+        TerroderUI._loadAllSavedHeightMaps()
+    
         cmds.columnLayout()
         cmds.button( label='Save Timestamp', command=TerroderUI._toggleSaveTimestamp)
         cmds.button( label='Load Timestamp', command=TerroderUI._toggleLoadTimestamp)
