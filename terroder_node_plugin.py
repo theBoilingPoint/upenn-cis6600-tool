@@ -6,6 +6,7 @@ from datetime import datetime
 import maya.api.OpenMaya as om
 import maya.cmds as cmds
 import maya.mel as mm
+import cv2
 
 import numpy as np
 from PIL import Image
@@ -115,47 +116,25 @@ class TerroderSimulationParameters(object):
     @property
     def upliftMap(self) -> np.ndarray:
         if self._upliftMap is None:
-            self._upliftMap = np.zeros(self.gridShape)
+
             if len(self._upliftMapFile) > 0:
                 try:
                     with Image.open(self.upliftMapFile) as image:
+                        # Read pixels directly first
+                        imagePixels = np.empty(image.size)
                         gsImage = image.convert('L')  # grayscale
-                        step = (float(gsImage.size[0]) / float(self.gridShape[0]), float(gsImage.size[1]) / float(self.gridShape[1]))
-                        
-                        for i in range(self.gridShape[0]):
-                            for k in range(self.gridShape[1]):
-                                # Interpolate (i, k)
-                                rx, ry = step[0] * i, step[1] * k
-                                self._upliftMap[i][k] = TerroderSimulationParameters._readInterpolatedUplift(gsImage, (rx, ry))
-
-                    self._upliftMap = self.minUpliftRatio + (1.0 - self.minUpliftRatio) * self._upliftMap
-                    self._upliftMap = np.clip(self._upliftMap, 0., 1.)
+                        for i in range(image.size[0]):
+                            for k in range(image.size[1]):
+                                imagePixels[i][k] = gsImage.getpixel((i, k)) / 255.0  # grayscale color seems to be 0-255
+                                
+                        self._upliftMap = cv2.resize(imagePixels, self.gridShape)  # resize/interpolate to fit gridShape
+                        self._upliftMap = self.minUpliftRatio + (1.0 - self.minUpliftRatio) * self._upliftMap
+                        self._upliftMap = np.clip(self._upliftMap, 0., 1.)
                 except FileNotFoundError:
                     om.MGlobal.displayWarning(f'File "{self.upliftMapFile}" not found.')
+                    self._upliftMap = np.zeros(self.gridShape)
         
         return self._upliftMap
-    
-    @staticmethod
-    def _readInterpolatedUplift(grayscaleImage: Image, coords: Tuple[float, float]):
-        x, y = coords
-        fx, fy = int(np.floor(x)), int(np.floor(y))
-        uplifts = []
-        weights = []
-        for dx in range(0, 2):
-            for dy in range(0, 2):
-                if not (0 <= fx + dx < grayscaleImage.size[0] and 0 <= fy + dy < grayscaleImage.size[1]):
-                    continue
-
-                weight = max(0, (1 - abs(fx + dx - x)) * (1 - abs(fy + dy - y)))
-                weights.append(weight)
-                color = grayscaleImage.getpixel((fx + dx, fy + dy))
-                uplifts.append(color / 255.0)
-        
-        totalWeight = sum(weights)
-        if totalWeight <= 0:
-            return 0
-        
-        return sum([weights[i] * uplifts[i] / totalWeight for i in range(len(uplifts))])
     
 
 class TerroderNode(om.MPxNode):
