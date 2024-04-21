@@ -125,8 +125,9 @@ class TerroderSimulationParameters(object):
                         for i in range(image.size[0]):
                             for k in range(image.size[1]):
                                 imagePixels[i][k] = gsImage.getpixel((i, k)) / 255.0  # grayscale color seems to be 0-255
-                                
-                        self._upliftMap = cv2.resize(imagePixels, self.gridShape)  # resize/interpolate to fit gridShape
+
+                        self._upliftMap = np.empty(self.gridShape)
+                        self._upliftMap = cv2.resize(src=imagePixels, dsize=self._upliftMap.shape, dst=self._upliftMap)  # resize/interpolate to fit gridShape
                         self._upliftMap = self.minUpliftRatio + (1.0 - self.minUpliftRatio) * self._upliftMap
                         self._upliftMap = np.clip(self._upliftMap, 0., 1.)
                 except FileNotFoundError:
@@ -373,7 +374,9 @@ class TerroderNode(om.MPxNode):
             om.MGlobal.displayInfo("[DEBUG] Using new sim params and resetting simulation")
             self.simParams = newSimParams
             if TerroderNode.retrievedHeightMap is not None:
-                self.heightMapTs = [cv2.resize(TerroderNode.retrievedHeightMap, self.simParams.gridShape)]
+                hm = np.empty(self.simParams.gridShape)
+                hm = cv2.resize(src=TerroderNode.retrievedHeightMap, dsize=hm.shape, dst=hm)
+                self.heightMapTs = [hm]
                 # if self.simParams.gridShape != TerroderNode.retrievedHeightMap.shape:
                 #     self.heightMapTs = [cv2.resize(TerroderNode.retrievedHeightMap, self.simParams.gridShape)]
                 # else:    
