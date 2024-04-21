@@ -1,6 +1,8 @@
 import os
 
 import math
+from datetime import datetime
+
 import maya.api.OpenMaya as om
 import maya.cmds as cmds
 import maya.mel as mm
@@ -40,10 +42,7 @@ class TerroderSimulationParameters(object):
         self._relErosionScale: float = relErosionScale
         self._waterHalfRetentionDist: float = waterHalfRetentionDist
         self._upliftMap = None
-
-        gridShapeX = max(int(math.ceil(self._targetGridScale[0] / self.cellSize)), 4)
-        gridShapeZ = max(int(math.ceil(self._targetGridScale[1] / self.cellSize)), 4)
-        self.gridShape: Tuple[int, int] = (gridShapeX, gridShapeZ)
+        self.gridShape: Tuple[int, int] = self.computeGridShape()
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, TerroderSimulationParameters):
@@ -57,29 +56,61 @@ class TerroderSimulationParameters(object):
             and math.isclose(self.relErosionScale, other.relErosionScale) \
             and math.isclose(self.waterHalfRetentionDist, other.waterHalfRetentionDist)
 
+    def computeGridShape(self) -> Tuple[int, int]:
+        return (max(int(math.ceil(self._targetGridScale[0] / self.cellSize)), 4), 
+                max(int(math.ceil(self._targetGridScale[1] / self.cellSize)), 4))
+    
+    @property
+    def targetGridScale(self) -> Tuple[float, float]:
+        return self._targetGridScale
+    
+    def setTargetGridScale(self, targetGridScale: Tuple[float, float]) -> None:
+        self._targetGridScale = targetGridScale
+        self.gridShape = self.computeGridShape()
+
     @property
     def cellSize(self) -> float:
         return self._cellSize
     
+    def setCellSize(self, cellSize: float) -> None:
+        self._cellSize = cellSize
+        self.gridShape = self.computeGridShape()
+    
     @property
     def upliftMapFile(self) -> str:
         return self._upliftMapFile
+    
+    def setUpliftMapFile(self, upliftMapFile: str) -> None:
+        self._upliftMapFile = upliftMapFile
+        self._upliftMap = None
 
     @property
     def minUpliftRatio(self) -> float:
         return self._minUpliftRatio
+    
+    def setMinUpliftRatio(self, minUpliftRatio: float) -> None:
+        self._minUpliftRatio = minUpliftRatio
 
     @property
     def relUpliftScale(self) -> float:
         return self._relUpliftScale
     
+    def setRelUpliftScale(self, relUpliftScale: float) -> None:
+        self._relUpliftScale = relUpliftScale
+    
     @property
     def relErosionScale(self) -> float:
         return self._relErosionScale
     
+    def setErosionScale(self, relErosionScale: float) -> None:
+        self._relErosionScale = relErosionScale
+    
     @property
     def waterHalfRetentionDist(self) -> float:
         return self._waterHalfRetentionDist
+    
+    def setWaterHalfRetentionDist(self, waterHalfRetentionDist: float) -> None:
+        self._waterHalfRetentionDist = waterHalfRetentionDist
 
     @property
     def upliftMap(self) -> np.ndarray:
@@ -157,16 +188,26 @@ class TerroderNode(om.MPxNode):
     aErosionRelScale = None
     aWaterHalfRetentionDistance = None
 
-    simulateFromTimestamp = None
+    toggleSaveTimestamp = None
+    toggleLoadTimestamp = None
+    toggleStartNewSimulation = None
 
     # output
     aOutputMesh = None
+
+    # For loading
+    savedHeightMaps = dict()
+    retrievedHeightMap = None
 
     def __init__(self):
         om.MPxNode.__init__(self)
 
         self.simParams: TerroderSimulationParameters = None
         self.heightMapTs: list[np.ndarray] = []  # element i is the heightmap after i iterations
+        
+        self.prevTimestampToggleValue = False
+        self.prevLoadTimestampToggleValue = False
+        self.prevStartNewSimulationToggleValue = False
 
     @staticmethod
     def create():
@@ -222,7 +263,15 @@ class TerroderNode(om.MPxNode):
         nAttr.default = 1.0
         nAttr.setMin(0.001)
 
-        TerroderNode.simulateFromTimestamp = nAttr.create("simulateFromTimestamp", "sft", om.MFnNumericData.kBoolean)
+        TerroderNode.toggleSaveTimestamp = nAttr.create("toggleSaveTimestamp", "tst", om.MFnNumericData.kBoolean)
+        MAKE_INPUT(nAttr)
+        nAttr.default = False
+
+        TerroderNode.toggleLoadTimestamp = nAttr.create("toggleLoadTimestamp", "tlt", om.MFnNumericData.kBoolean)
+        MAKE_INPUT(nAttr)
+        nAttr.default = False
+
+        TerroderNode.toggleStartNewSimulation = nAttr.create("toggleStartNewSimulation", "tsns", om.MFnNumericData.kBoolean)
         MAKE_INPUT(nAttr)
         nAttr.default = False
 
@@ -243,7 +292,9 @@ class TerroderNode(om.MPxNode):
         om.MPxNode.addAttribute(TerroderNode.aUpliftRelScale)
         om.MPxNode.addAttribute(TerroderNode.aErosionRelScale)
         om.MPxNode.addAttribute(TerroderNode.aWaterHalfRetentionDistance)
-        om.MPxNode.addAttribute(TerroderNode.simulateFromTimestamp)
+        om.MPxNode.addAttribute(TerroderNode.toggleSaveTimestamp)
+        om.MPxNode.addAttribute(TerroderNode.toggleLoadTimestamp)
+        om.MPxNode.addAttribute(TerroderNode.toggleStartNewSimulation)
 
         om.MPxNode.attributeAffects(TerroderNode.aTime, TerroderNode.aOutputMesh)
         om.MPxNode.attributeAffects(TerroderNode.aUpliftMapFile, TerroderNode.aOutputMesh)
@@ -254,9 +305,37 @@ class TerroderNode(om.MPxNode):
         om.MPxNode.attributeAffects(TerroderNode.aUpliftRelScale, TerroderNode.aOutputMesh)
         om.MPxNode.attributeAffects(TerroderNode.aErosionRelScale, TerroderNode.aOutputMesh)
         om.MPxNode.attributeAffects(TerroderNode.aWaterHalfRetentionDistance, TerroderNode.aOutputMesh)
-        om.MPxNode.attributeAffects(TerroderNode.simulateFromTimestamp, TerroderNode.aOutputMesh)
+        om.MPxNode.attributeAffects(TerroderNode.toggleSaveTimestamp, TerroderNode.aOutputMesh)
+        om.MPxNode.attributeAffects(TerroderNode.toggleLoadTimestamp, TerroderNode.aOutputMesh)
+        om.MPxNode.attributeAffects(TerroderNode.toggleStartNewSimulation, TerroderNode.aOutputMesh)
 
         print("[DEBUG] TerroderNode initialised.\n")
+    
+    def loadSavedAttributes(self, newSimParams, key):
+        upliftMapFile = TerroderNode.savedHeightMaps[key][1].upliftMapFile
+        minUpliftRatio = TerroderNode.savedHeightMaps[key][1].minUpliftRatio
+        cellSize = TerroderNode.savedHeightMaps[key][1].cellSize
+        gridScale = TerroderNode.savedHeightMaps[key][1].targetGridScale
+        relUpliftScale = TerroderNode.savedHeightMaps[key][1].relUpliftScale
+        relErosionScale = TerroderNode.savedHeightMaps[key][1].relErosionScale
+        waterHalfRetentionDist = TerroderNode.savedHeightMaps[key][1].waterHalfRetentionDist
+
+        newSimParams.setUpliftMapFile(upliftMapFile)
+        newSimParams.setMinUpliftRatio(minUpliftRatio)
+        newSimParams.setCellSize(cellSize)
+        newSimParams.setTargetGridScale(gridScale)
+        newSimParams.setRelUpliftScale(relUpliftScale)
+        newSimParams.setErosionScale(relErosionScale)
+        newSimParams.setWaterHalfRetentionDist(waterHalfRetentionDist)
+
+        cmds.setAttr(f"{TerroderUI.getSelectedNodeName()}.upliftMapFile", upliftMapFile, type="string")
+        cmds.setAttr(f"{TerroderUI.getSelectedNodeName()}.minUpliftRatio", minUpliftRatio)
+        cmds.setAttr(f"{TerroderUI.getSelectedNodeName()}.cellSize", cellSize)
+        cmds.setAttr(f"{TerroderUI.getSelectedNodeName()}.gridScaleX", gridScale[0])
+        cmds.setAttr(f"{TerroderUI.getSelectedNodeName()}.gridScaleZ", gridScale[1])
+        cmds.setAttr(f"{TerroderUI.getSelectedNodeName()}.upliftRelativeScale", relUpliftScale)
+        cmds.setAttr(f"{TerroderUI.getSelectedNodeName()}.erosionRelativeScale", relErosionScale)
+        cmds.setAttr(f"{TerroderUI.getSelectedNodeName()}.waterHalfRetentionDistance", waterHalfRetentionDist)
     
     def compute(self, plug: om.MPlug, dataBlock: om.MDataBlock):
         if (plug != TerroderNode.aOutputMesh) and (plug.parent() != TerroderNode.aOutputMesh):
@@ -265,7 +344,7 @@ class TerroderNode(om.MPxNode):
         rawTime = dataBlock.inputValue(TerroderNode.aTime).asFloat()
         numIterations = max(0, int(rawTime) - 1)
 
-        # get the input data
+        # Params for simulation, editable in attribute editor
         avUpliftMapFile = dataBlock.inputValue(TerroderNode.aUpliftMapFile).asString()
         avMinUpliftRatio = dataBlock.inputValue(TerroderNode.aMinUpliftRatio).asFloat()
         avCellSize = dataBlock.inputValue(TerroderNode.aCellSize).asFloat()
@@ -275,14 +354,48 @@ class TerroderNode(om.MPxNode):
         avWaterHalfRetentionDist = dataBlock.inputValue(TerroderNode.aWaterHalfRetentionDistance).asFloat()
         newSimParams = TerroderSimulationParameters(avCellSize, avGridScale, avUpliftMapFile, avMinUpliftRatio, 
                                                     avRelUpliftScale, avRelErosionScale, avWaterHalfRetentionDist)
-        startFromTimestamp = dataBlock.inputValue(TerroderNode.simulateFromTimestamp).asBool()
+        # Params for menu button control, not editable in attribute editor
+        # TODO: Ideally these attributes should be hidden from the attribute editor
+        saveTimestampVal = dataBlock.inputValue(TerroderNode.toggleSaveTimestamp).asBool()
+        loadTimestampVal = dataBlock.inputValue(TerroderNode.toggleLoadTimestamp).asBool()
+        startNewSimulationVal = dataBlock.inputValue(TerroderNode.toggleStartNewSimulation).asBool()
 
+        if (saveTimestampVal != self.prevTimestampToggleValue):
+            # If we enter this if statement, it means the save timestamp button was pressed
+            self.prevTimestampToggleValue = saveTimestampVal
+            key = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+            time = cmds.currentTime(query=True) # Get currently selected time on the time line
+            TerroderNode.savedHeightMaps[key] = (self.heightMapTs[int(time)], newSimParams)
+            cmds.textScrollList(TerroderUI.getScrollListName(), edit=True, append={key})
+        
+        if (loadTimestampVal != self.prevLoadTimestampToggleValue):
+            # If we enter this if statement, it means the load timestamp button was pressed
+            self.prevLoadTimestampToggleValue = loadTimestampVal
+            selectedItemList = TerroderUI.getSelectedListItem()
+            if selectedItemList:
+                key = selectedItemList[0]
+                print("[DEBUG] Loading heightmap with key: ", key)
+                TerroderNode.retrievedHeightMap = TerroderNode.savedHeightMaps[key][0]
+                self.loadSavedAttributes(newSimParams, key)
+                self.heightMapTs = [TerroderNode.retrievedHeightMap]
+            else:
+                print("[DEBUG] No timestamp is selected from the list.")
+        
+        if (startNewSimulationVal != self.prevStartNewSimulationToggleValue):
+            # If we enter this if statement, it means the start new simulation button was pressed
+            self.prevStartNewSimulationToggleValue = startNewSimulationVal
+            cmds.textScrollList(TerroderUI.getScrollListName(), edit=True, deselectAll=True)
+            TerroderNode.retrievedHeightMap = None
+            self.heightMapTs = []
+        
         if self.simParams is None or newSimParams != self.simParams:
             # Current sim params are out of date; reset
             om.MGlobal.displayInfo("[DEBUG] Using new sim params and resetting simulation")
             self.simParams = newSimParams
-            if startFromTimestamp:
-                self.heightMapTs = [self.heightMapTs[int(rawTime)]]
+            if TerroderNode.retrievedHeightMap is not None:
+                if self.simParams.cellSize != self.simParams.cellSize:
+                    print("[DEBUG] Cell size changed.")
+                self.heightMapTs = [TerroderNode.retrievedHeightMap]
             else:
                 self.heightMapTs = []
 
@@ -421,19 +534,23 @@ class TerroderNode(om.MPxNode):
     
     def getNeighborCells(self, cell: Tuple[int, int]) -> list:
         return [(cell[0] + di, cell[1] + dk) for (di, dk) in TerroderNode.NEIGHBOR_ORDER]
-
+    
     
 class TerroderUI(object):
     """
     Static class to organize UI info
     """
     createdMenuName = ""
+    scrollListName = ""
+    selectedListItem = None
+    selectedNodeName = None
 
     @staticmethod
     def createMenu():
         mainWindowName = mm.eval('string $temp = $gMainWindow;')
         TerroderUI.createdMenuName = cmds.menu(l="Terroder", p=mainWindowName)
         cmds.menuItem(l="Create Terroder Mesh", p=TerroderUI.createdMenuName, c=TerroderUI._createNode)
+        cmds.menuItem(l="Save/Load Timestamps", p=TerroderUI.createdMenuName, c=TerroderUI._createSavePointWindow)
 
     @staticmethod
     def destroyMenu():
@@ -446,6 +563,11 @@ class TerroderUI(object):
         visibleMeshNodeName = cmds.createNode("mesh", parent=transformNodeName)
         cmds.sets(visibleMeshNodeName, add="initialShadingGroup")
         terroderNodeName = cmds.createNode(TerroderNode.TYPE_NAME)
+
+        cmds.setAttr(f"{terroderNodeName}.toggleSaveTimestamp", lock=True)
+        cmds.setAttr(f"{terroderNodeName}.toggleLoadTimestamp", lock=True)
+        cmds.setAttr(f"{terroderNodeName}.toggleStartNewSimulation", lock=True)
+        
         cmds.connectAttr("time1.outTime", f"{terroderNodeName}.{TerroderNode.TIME_ATTR_LONG_NAME}")
         cmds.connectAttr(f"{terroderNodeName}.{TerroderNode.OUTPUT_MESH_ATTR_LONG_NAME}", f"{visibleMeshNodeName}.inMesh")
 
@@ -460,6 +582,93 @@ class TerroderUI(object):
             if tabNames[i] == terroderNodeName:
                 cmds.tabLayout(attrEdTabLayoutName, e=True, sti=i+1)
         """
+    
+    @staticmethod
+    def _toggleValue(nodeName, attrName):
+        cmds.setAttr(f"{nodeName}.{attrName}", lock=False)
+
+        prevVal = cmds.getAttr(f"{nodeName}.{attrName}")
+        cmds.setAttr(f"{nodeName}.{attrName}", not prevVal)
+
+        cmds.setAttr(f"{nodeName}.{attrName}", lock=True)
+        
+    @staticmethod
+    def _toggleNodeAttribute(attrName):
+        selected = cmds.ls(type=['TerroderNode']) or []
+
+        if (len(selected) == 0):
+            print("No TerroderNode selected.")
+            return
+        
+        if (len(selected) != 1):
+            print("Please only select one TerroderNode.")
+            return
+
+        TerroderUI.selectedNodeName = selected[0]
+
+        if (attrName == "saveTimestamp"): 
+            TerroderUI._toggleValue(selected[0], "toggleSaveTimestamp")
+        elif (attrName == "loadTimestamp"):
+            TerroderUI._toggleValue(selected[0], "toggleLoadTimestamp")
+            TerroderUI.selectedListItem = cmds.textScrollList(TerroderUI.scrollListName, q=1, si=1)
+        elif (attrName == "startNewSimulation"):
+            TerroderUI._toggleValue(selected[0], "toggleStartNewSimulation")
+        else:
+            print(f"Node {selected[0]} doesn't have attribute {attrName}.")
+            return
+        
+    @staticmethod
+    def _toggleSaveTimestamp(*args) -> None:
+        TerroderUI._toggleNodeAttribute("saveTimestamp")
+    
+    @staticmethod
+    def _toggleLoadTimestamp(*args) -> None:
+        TerroderUI._toggleNodeAttribute("loadTimestamp")
+
+    @staticmethod
+    def _toggleStartNewSimulation(*args) -> None:
+        TerroderUI._toggleNodeAttribute("startNewSimulation")
+
+    @staticmethod
+    def _createSavePointWindow(*args) -> None:
+        if (cmds.window("savePointWindow", exists=True)):
+            cmds.deleteUI("savePointWindow")
+        
+        cmds.window("savePointWindow", title="Saved Terroder Meshes")
+
+        cmds.menuBarLayout() # Need to call this first before adding a menu
+        parent = cmds.menu(label="Mesh List")
+        cmds.menuItem( label='New' )
+
+        cmds.paneLayout()
+        TerroderUI.scrollListName = cmds.textScrollList( numberOfRows=8, allowMultiSelection=True, showIndexedItem=4 )
+        cmds.setParent( '..' )
+
+ 
+        cmds.columnLayout()
+        cmds.button( label='Save Timestamp', command=TerroderUI._toggleSaveTimestamp)
+        cmds.button( label='Load Timestamp', command=TerroderUI._toggleLoadTimestamp)
+        cmds.button( label='Start New Simulation', command=TerroderUI._toggleStartNewSimulation)
+        # cmds.button( label='Load Timestamp', command=('cmds.menuItem( label=\'New\', parent=\"' + parent + '\")') )
+
+        # Get current time on timeline as float
+        # time = cmds.currentTime( query=True )
+        cmds.setParent( '..' )
+
+        cmds.showWindow("savePointWindow")
+    
+    @staticmethod
+    def getScrollListName():
+        return TerroderUI.scrollListName
+
+    @staticmethod
+    def getSelectedListItem():
+        return TerroderUI.selectedListItem
+    
+    @staticmethod
+    def getSelectedNodeName():
+        return TerroderUI.selectedNodeName
+        
 
 # initialize the script plug-in
 def initializePlugin(mObject):
