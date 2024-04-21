@@ -372,9 +372,10 @@ class TerroderNode(om.MPxNode):
             om.MGlobal.displayInfo("[DEBUG] Using new sim params and resetting simulation")
             self.simParams = newSimParams
             if TerroderNode.retrievedHeightMap is not None:
-                if self.simParams.cellSize != self.simParams.cellSize:
-                    print("[DEBUG] Cell size changed.")
-                self.heightMapTs = [TerroderNode.retrievedHeightMap]
+                if self.simParams.gridShape != TerroderNode.retrievedHeightMap.shape:
+                    self.heightMapTs = [cv2.resize(TerroderNode.retrievedHeightMap, self.simParams.gridShape)]
+                else:    
+                    self.heightMapTs = [TerroderNode.retrievedHeightMap]
             else:
                 self.heightMapTs = []
 
