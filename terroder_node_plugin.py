@@ -247,7 +247,7 @@ class TerroderNode(om.MPxNode):
 
         TerroderNode.aBasinProportion = nAttr.create("basinProportion", "bp", om.MFnNumericData.kFloat)
         MAKE_INPUT(nAttr)
-        nAttr.default = 0.02
+        nAttr.default = 0.06
         nAttr.setMin(0.0)
         nAttr.setMax(1.0)
 
@@ -534,22 +534,20 @@ class TerroderNode(om.MPxNode):
         return meshObj
     
     def getGridColors(self, heightMap: np.ndarray, basinProportion: float) -> np.ndarray:
-        colors: np.ndarray = np.empty((heightMap.shape[0], heightMap.shape[1], 3))
-
         # Compute height map threshold for which approximately riverProportion of cells are above 
         # by binary search; invariant: true proportion within [lo, hi]
+        chm = heightMap[1:heightMap.shape[0]-1][1:heightMap.shape[1]-1]
         lo = 0.0
         hi = 1.0
         for _ in range(12):
             testThreshold = (lo + hi) / 2.0
-            belowThresholdMap = np.less(np.subtract(heightMap, testThreshold), 0)
+            belowThresholdMap = np.less(np.subtract(chm, testThreshold), 0)
             belowThresholdProportion = np.mean(belowThresholdMap.astype(np.float64))
             if belowThresholdProportion < basinProportion:
                 lo = testThreshold  # threhsold is too low, raise it
             else:
                 hi = testThreshold
         
-        # Initially, label cells under the basin threshold as water
         basinThreshold = (lo + hi) / 2.0
         isWater = np.less(heightMap, basinThreshold)
         frontier = []
@@ -557,10 +555,7 @@ class TerroderNode(om.MPxNode):
             for k in range(isWater.shape[1]):
                 if isWater[i][k]:
                     frontier.append((i, k))
-
-        # Now each water cell makes its steepest uphill neighbor (if there is one) a water cell
-        # This should only occur at most once per water cell
-        # Essentially a reachability search
+        
         frontierSizes = []
         while len(frontier) > 0:
             frontierSizes.append(len(frontier))
@@ -590,7 +585,7 @@ class TerroderNode(om.MPxNode):
 
         om.MGlobal.displayInfo(f"frontier sizes: {frontierSizes}")
 
-
+        colors: np.ndarray = np.empty((heightMap.shape[0], heightMap.shape[1], 3))
         for i in range(colors.shape[0]):
             for k in range(colors.shape[1]):
                 if isWater[i][k]:
