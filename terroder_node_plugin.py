@@ -156,6 +156,8 @@ class TerroderNode(om.MPxNode):
     TIME_ATTR_SHORT_NAME = "t"
     OUTPUT_MESH_ATTR_LONG_NAME = "outputMesh"
     OUTPUT_MESH_ATTR_SHORT_NAME = "om"
+    OUTPUT_WATER_MESH_ATTR_LONG_NAME = "outputWaterMesh"
+    OUTPUT_WATER_MESH_ATTR_SHORT_NAME = "owm"
 
     # Attributes
     # input
@@ -175,6 +177,7 @@ class TerroderNode(om.MPxNode):
 
     # output
     aOutputMesh = None
+    aOutputWaterMesh = None
 
     # For loading
     savedHeightMaps = dict()
@@ -273,6 +276,7 @@ class TerroderNode(om.MPxNode):
         om.MPxNode.addAttribute(TerroderNode.aUpliftRelScale)
         om.MPxNode.addAttribute(TerroderNode.aErosionRelScale)
         om.MPxNode.addAttribute(TerroderNode.aWaterHalfRetentionDistance)
+
         om.MPxNode.addAttribute(TerroderNode.toggleSaveTimestamp)
         om.MPxNode.addAttribute(TerroderNode.toggleLoadTimestamp)
         om.MPxNode.addAttribute(TerroderNode.toggleStartNewSimulation)
@@ -286,6 +290,7 @@ class TerroderNode(om.MPxNode):
         om.MPxNode.attributeAffects(TerroderNode.aUpliftRelScale, TerroderNode.aOutputMesh)
         om.MPxNode.attributeAffects(TerroderNode.aErosionRelScale, TerroderNode.aOutputMesh)
         om.MPxNode.attributeAffects(TerroderNode.aWaterHalfRetentionDistance, TerroderNode.aOutputMesh)
+        
         om.MPxNode.attributeAffects(TerroderNode.toggleSaveTimestamp, TerroderNode.aOutputMesh)
         om.MPxNode.attributeAffects(TerroderNode.toggleLoadTimestamp, TerroderNode.aOutputMesh)
         om.MPxNode.attributeAffects(TerroderNode.toggleStartNewSimulation, TerroderNode.aOutputMesh)
@@ -485,6 +490,7 @@ class TerroderNode(om.MPxNode):
         vertices = []
         polygonCounts = []
         polygonConnects = []
+        polygonIdxToHeight = {}
 
         heightMap: np.ndarray = self.heightMapTs[numIterations]
         # center at (0, 0)
@@ -505,13 +511,28 @@ class TerroderNode(om.MPxNode):
             for k in range(heightMap.shape[1] - 1):
                 # Create the quad with lower corner at grid point (i, k); this order lets the top be shaded
                 polygonCounts.append(4)
-                polygonConnects.append(indexMap[(i, k)])
-                polygonConnects.append(indexMap[(i, k + 1)])
-                polygonConnects.append(indexMap[(i + 1, k + 1)])
-                polygonConnects.append(indexMap[(i + 1, k)])
+                vertexIndices = [indexMap[(i, k)], indexMap[(i, k + 1)], indexMap[(i + 1, k + 1)], indexMap[(i + 1, k)]]
+                for vertexIndex in vertexIndices:
+                    polygonConnects.append(vertexIndex)
+
+                cornerHeights = [vertices[vi][1] for vi in vertexIndices]
+                avgHeight = sum(cornerHeights) / 4.
+                polygonIdxToHeight[len(polygonCounts) - 1] = avgHeight
+
 
         fnMesh = om.MFnMesh()
         meshObj: om.MObject = fnMesh.create(vertices, polygonCounts, polygonConnects, parent=outputData)
+
+        for i in range(len(polygonCounts)):
+            h = polygonIdxToHeight[i]
+
+            if h < 0.1:
+                fnMesh.setFaceColor(om.MColor([1, 0, 0]), i)
+            elif h < 0.2:
+                fnMesh.setFaceColor(om.MColor([0, 1, 0]), i)
+            else:
+                fnMesh.setFaceColor(om.MColor([0, 0, 1]), i)
+
         return meshObj
     
     def cellInBounds(self, cell: Tuple[int, int]) -> bool:
@@ -550,7 +571,13 @@ class TerroderUI(object):
     def _createNode(*args) -> None:
         transformNodeName = cmds.createNode("transform")
         visibleMeshNodeName = cmds.createNode("mesh", parent=transformNodeName)
-        cmds.sets(visibleMeshNodeName, add="initialShadingGroup")
+
+        lambertShaderName = cmds.shadingNode('lambert', asShader=True, name='red_shader1')
+        lambertShaderSet = cmds.sets(renderable=True, noSurfaceShader=True, empty=True)
+        cmds.connectAttr(lambertShaderName + '.outColor', lambertShaderSet + '.surfaceShader', force=True)
+        lambertShadingGroup = cmds.listConnections(lambertShaderName, type='shadingEngine')[-1]
+        cmds.sets(visibleMeshNodeName, fe=lambertShadingGroup)
+
         terroderNodeName = cmds.createNode(TerroderNode.TYPE_NAME)
 
         cmds.setAttr(f"{terroderNodeName}.toggleSaveTimestamp", lock=True)
