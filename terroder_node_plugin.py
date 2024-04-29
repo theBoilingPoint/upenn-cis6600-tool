@@ -156,8 +156,6 @@ class TerroderNode(om.MPxNode):
     TIME_ATTR_SHORT_NAME = "t"
     OUTPUT_MESH_ATTR_LONG_NAME = "outputMesh"
     OUTPUT_MESH_ATTR_SHORT_NAME = "om"
-    OUTPUT_WATER_MESH_ATTR_LONG_NAME = "outputWaterMesh"
-    OUTPUT_WATER_MESH_ATTR_SHORT_NAME = "owm"
 
     # Attributes
     # input
@@ -170,6 +168,7 @@ class TerroderNode(om.MPxNode):
     aUpliftRelScale = None
     aErosionRelScale = None
     aWaterHalfRetentionDistance = None
+    aBasinProportion = None
 
     toggleSaveTimestamp = None
     toggleLoadTimestamp = None
@@ -177,7 +176,6 @@ class TerroderNode(om.MPxNode):
 
     # output
     aOutputMesh = None
-    aOutputWaterMesh = None
 
     # For loading
     savedHeightMaps = dict()
@@ -247,6 +245,12 @@ class TerroderNode(om.MPxNode):
         nAttr.default = 1.0
         nAttr.setMin(0.001)
 
+        TerroderNode.aBasinProportion = nAttr.create("basinProportion", "bp", om.MFnNumericData.kFloat)
+        MAKE_INPUT(nAttr)
+        nAttr.default = 0.02
+        nAttr.setMin(0.0)
+        nAttr.setMax(1.0)
+
         TerroderNode.toggleSaveTimestamp = nAttr.create("toggleSaveTimestamp", "tst", om.MFnNumericData.kBoolean)
         MAKE_INPUT(nAttr)
         nAttr.default = False
@@ -276,6 +280,7 @@ class TerroderNode(om.MPxNode):
         om.MPxNode.addAttribute(TerroderNode.aUpliftRelScale)
         om.MPxNode.addAttribute(TerroderNode.aErosionRelScale)
         om.MPxNode.addAttribute(TerroderNode.aWaterHalfRetentionDistance)
+        om.MPxNode.addAttribute(TerroderNode.aBasinProportion)
 
         om.MPxNode.addAttribute(TerroderNode.toggleSaveTimestamp)
         om.MPxNode.addAttribute(TerroderNode.toggleLoadTimestamp)
@@ -290,6 +295,7 @@ class TerroderNode(om.MPxNode):
         om.MPxNode.attributeAffects(TerroderNode.aUpliftRelScale, TerroderNode.aOutputMesh)
         om.MPxNode.attributeAffects(TerroderNode.aErosionRelScale, TerroderNode.aOutputMesh)
         om.MPxNode.attributeAffects(TerroderNode.aWaterHalfRetentionDistance, TerroderNode.aOutputMesh)
+        om.MPxNode.attributeAffects(TerroderNode.aBasinProportion, TerroderNode.aOutputMesh)
         
         om.MPxNode.attributeAffects(TerroderNode.toggleSaveTimestamp, TerroderNode.aOutputMesh)
         om.MPxNode.attributeAffects(TerroderNode.toggleLoadTimestamp, TerroderNode.aOutputMesh)
@@ -338,6 +344,7 @@ class TerroderNode(om.MPxNode):
         avRelUpliftScale = dataBlock.inputValue(TerroderNode.aUpliftRelScale).asFloat()
         avRelErosionScale = dataBlock.inputValue(TerroderNode.aErosionRelScale).asFloat()
         avWaterHalfRetentionDist = dataBlock.inputValue(TerroderNode.aWaterHalfRetentionDistance).asFloat()
+        avBasinProportion = dataBlock.inputValue(TerroderNode.aBasinProportion).asFloat()
         newSimParams = TerroderSimulationParameters(avCellSize, avGridScale, avUpliftMapFile, avMinUpliftRatio, 
                                                     avRelUpliftScale, avRelErosionScale, avWaterHalfRetentionDist)
         # Params for menu button control, not editable in attribute editor
@@ -397,7 +404,7 @@ class TerroderNode(om.MPxNode):
         outputMeshHandle: om.MDataHandle = dataBlock.outputValue(TerroderNode.aOutputMesh)
         dataCreator: om.MFnMeshData = om.MFnMeshData()
         outputData: om.MObject = dataCreator.create()
-        self.createOutputMesh(outputData, numIterations)
+        self.createOutputMesh(outputData, numIterations, avBasinProportion)
         outputMeshHandle.setMObject(outputData)
         outputMeshHandle.setClean()
         
@@ -483,16 +490,17 @@ class TerroderNode(om.MPxNode):
 
         return drainageAreaMap
 
-    def createOutputMesh(self, outputData: om.MObject, numIterations: int):
+    def createOutputMesh(self, outputData: om.MObject, numIterations: int, basinProportion: float):
         if numIterations >= len(self.heightMapTs):
             raise RuntimeError(f"No height map corresponding to {numIterations} iterations.")
 
         vertices = []
         polygonCounts = []
         polygonConnects = []
-        polygonIdxToHeight = {}
 
         heightMap: np.ndarray = self.heightMapTs[numIterations]
+        gridColors: np.ndarray = self.getGridColors(heightMap, basinProportion)
+
         # center at (0, 0)
         xMin = -0.5 * self.simParams.cellSize * (heightMap.shape[0] - 1)
         zMin = -0.5 * self.simParams.cellSize * (heightMap.shape[1] - 1)
@@ -515,25 +523,82 @@ class TerroderNode(om.MPxNode):
                 for vertexIndex in vertexIndices:
                     polygonConnects.append(vertexIndex)
 
-                cornerHeights = [vertices[vi][1] for vi in vertexIndices]
-                avgHeight = sum(cornerHeights) / 4.
-                polygonIdxToHeight[len(polygonCounts) - 1] = avgHeight
-
 
         fnMesh = om.MFnMesh()
         meshObj: om.MObject = fnMesh.create(vertices, polygonCounts, polygonConnects, parent=outputData)
 
-        for i in range(len(polygonCounts)):
-            h = polygonIdxToHeight[i]
-
-            if h < 0.1:
-                fnMesh.setFaceColor(om.MColor([1, 0, 0]), i)
-            elif h < 0.2:
-                fnMesh.setFaceColor(om.MColor([0, 1, 0]), i)
-            else:
-                fnMesh.setFaceColor(om.MColor([0, 0, 1]), i)
+        for (i, k), vi in indexMap.items():
+            color = om.MColor(gridColors[i][k])
+            fnMesh.setVertexColor(color, vi)
 
         return meshObj
+    
+    def getGridColors(self, heightMap: np.ndarray, basinProportion: float) -> np.ndarray:
+        colors: np.ndarray = np.empty((heightMap.shape[0], heightMap.shape[1], 3))
+
+        # Compute height map threshold for which approximately riverProportion of cells are above 
+        # by binary search; invariant: true proportion within [lo, hi]
+        lo = 0.0
+        hi = 1.0
+        for _ in range(12):
+            testThreshold = (lo + hi) / 2.0
+            belowThresholdMap = np.less(np.subtract(heightMap, testThreshold), 0)
+            belowThresholdProportion = np.mean(belowThresholdMap.astype(np.float64))
+            if belowThresholdProportion < basinProportion:
+                lo = testThreshold  # threhsold is too low, raise it
+            else:
+                hi = testThreshold
+        
+        # Initially, label cells under the basin threshold as water
+        basinThreshold = (lo + hi) / 2.0
+        isWater = np.less(heightMap, basinThreshold)
+        frontier = []
+        for i in range(isWater.shape[0]):
+            for k in range(isWater.shape[1]):
+                if isWater[i][k]:
+                    frontier.append((i, k))
+
+        # Now each water cell makes its steepest uphill neighbor (if there is one) a water cell
+        # This should only occur at most once per water cell
+        # Essentially a reachability search
+        frontierSizes = []
+        while len(frontier) > 0:
+            frontierSizes.append(len(frontier))
+            next_frontier = []
+            for i, k in frontier:
+                neighborCells = self.getNeighborCells((i, k))
+                
+                maxIncr = 0
+                upperNeighbor = None
+                for ni, nk in neighborCells:
+                    if not self.cellInBounds((ni, nk)):
+                        continue
+                    
+                    incr = heightMap[ni][nk] - heightMap[i][k]
+                    if incr > maxIncr:
+                        maxIncr = incr
+                        upperNeighbor = ni, nk
+                
+                if upperNeighbor is None:
+                    continue
+
+                ni, nk = upperNeighbor
+                if not isWater[ni][nk]:
+                    isWater[ni][nk] = True
+                    next_frontier.append((ni, nk))
+            frontier = next_frontier
+
+        om.MGlobal.displayInfo(f"frontier sizes: {frontierSizes}")
+
+
+        for i in range(colors.shape[0]):
+            for k in range(colors.shape[1]):
+                if isWater[i][k]:
+                    colors[i][k][:] = np.array([0.0, 0.0, 1.0])
+                else:
+                    colors[i][k][:] = np.array([0.0, 1.0, 0.0])
+        
+        return colors
     
     def cellInBounds(self, cell: Tuple[int, int]) -> bool:
         return 0 <= cell[0] < self.simParams.gridShape[0] and 0 <= cell[1] < self.simParams.gridShape[1]
@@ -569,23 +634,23 @@ class TerroderUI(object):
     
     @staticmethod
     def _createNode(*args) -> None:
-        transformNodeName = cmds.createNode("transform")
-        visibleMeshNodeName = cmds.createNode("mesh", parent=transformNodeName)
+        terrainTransformNodeName = cmds.createNode("transform", n="terrainTransform#")
+        terrainVisibleMeshNodeName = cmds.createNode("mesh", parent=terrainTransformNodeName, n="terrainMesh#")
 
-        lambertShaderName = cmds.shadingNode('lambert', asShader=True, name='red_shader1')
+        lambertShaderName = cmds.shadingNode('lambert', asShader=True, name='lambert_shader#')
         lambertShaderSet = cmds.sets(renderable=True, noSurfaceShader=True, empty=True)
         cmds.connectAttr(lambertShaderName + '.outColor', lambertShaderSet + '.surfaceShader', force=True)
         lambertShadingGroup = cmds.listConnections(lambertShaderName, type='shadingEngine')[-1]
-        cmds.sets(visibleMeshNodeName, fe=lambertShadingGroup)
+        cmds.sets(terrainVisibleMeshNodeName, fe=lambertShadingGroup)
 
         terroderNodeName = cmds.createNode(TerroderNode.TYPE_NAME)
 
         cmds.setAttr(f"{terroderNodeName}.toggleSaveTimestamp", lock=True)
         cmds.setAttr(f"{terroderNodeName}.toggleLoadTimestamp", lock=True)
         cmds.setAttr(f"{terroderNodeName}.toggleStartNewSimulation", lock=True)
-        
+
         cmds.connectAttr("time1.outTime", f"{terroderNodeName}.{TerroderNode.TIME_ATTR_LONG_NAME}")
-        cmds.connectAttr(f"{terroderNodeName}.{TerroderNode.OUTPUT_MESH_ATTR_LONG_NAME}", f"{visibleMeshNodeName}.inMesh")
+        cmds.connectAttr(f"{terroderNodeName}.{TerroderNode.OUTPUT_MESH_ATTR_LONG_NAME}", f"{terrainVisibleMeshNodeName}.inMesh")
 
         """
         BELOW: Try to select the transform and switch to the TerroderNode window in the attribute editor
