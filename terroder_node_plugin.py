@@ -168,7 +168,7 @@ class TerroderNode(om.MPxNode):
     aUpliftRelScale = None
     aErosionRelScale = None
     aWaterHalfRetentionDistance = None
-    aBasinProportion = None
+    aSnowHeight = None
 
     toggleSaveTimestamp = None
     toggleLoadTimestamp = None
@@ -211,7 +211,7 @@ class TerroderNode(om.MPxNode):
 
         TerroderNode.aMinUpliftRatio = nAttr.create("minUpliftRatio", "mur", om.MFnNumericData.kFloat)
         MAKE_INPUT(nAttr)
-        nAttr.default = 0.1
+        nAttr.default = 0.0
         nAttr.setMin(0.0)
         nAttr.setMax(0.999)
 
@@ -245,10 +245,10 @@ class TerroderNode(om.MPxNode):
         nAttr.default = 1.0
         nAttr.setMin(0.001)
 
-        TerroderNode.aBasinProportion = nAttr.create("basinProportion", "bp", om.MFnNumericData.kFloat)
+        TerroderNode.aSnowHeight = nAttr.create("snowHeight", "sh", om.MFnNumericData.kFloat)
         MAKE_INPUT(nAttr)
-        nAttr.default = 0.06
-        nAttr.setMin(0.0)
+        nAttr.default = 0.25
+        nAttr.setMin(0.001)
         nAttr.setMax(1.0)
 
         TerroderNode.toggleSaveTimestamp = nAttr.create("toggleSaveTimestamp", "tst", om.MFnNumericData.kBoolean)
@@ -280,7 +280,8 @@ class TerroderNode(om.MPxNode):
         om.MPxNode.addAttribute(TerroderNode.aUpliftRelScale)
         om.MPxNode.addAttribute(TerroderNode.aErosionRelScale)
         om.MPxNode.addAttribute(TerroderNode.aWaterHalfRetentionDistance)
-        om.MPxNode.addAttribute(TerroderNode.aBasinProportion)
+        om.MPxNode.addAttribute(TerroderNode.aSnowHeight)
+
 
         om.MPxNode.addAttribute(TerroderNode.toggleSaveTimestamp)
         om.MPxNode.addAttribute(TerroderNode.toggleLoadTimestamp)
@@ -295,7 +296,7 @@ class TerroderNode(om.MPxNode):
         om.MPxNode.attributeAffects(TerroderNode.aUpliftRelScale, TerroderNode.aOutputMesh)
         om.MPxNode.attributeAffects(TerroderNode.aErosionRelScale, TerroderNode.aOutputMesh)
         om.MPxNode.attributeAffects(TerroderNode.aWaterHalfRetentionDistance, TerroderNode.aOutputMesh)
-        om.MPxNode.attributeAffects(TerroderNode.aBasinProportion, TerroderNode.aOutputMesh)
+        om.MPxNode.attributeAffects(TerroderNode.aSnowHeight, TerroderNode.aOutputMesh)
         
         om.MPxNode.attributeAffects(TerroderNode.toggleSaveTimestamp, TerroderNode.aOutputMesh)
         om.MPxNode.attributeAffects(TerroderNode.toggleLoadTimestamp, TerroderNode.aOutputMesh)
@@ -344,7 +345,7 @@ class TerroderNode(om.MPxNode):
         avRelUpliftScale = dataBlock.inputValue(TerroderNode.aUpliftRelScale).asFloat()
         avRelErosionScale = dataBlock.inputValue(TerroderNode.aErosionRelScale).asFloat()
         avWaterHalfRetentionDist = dataBlock.inputValue(TerroderNode.aWaterHalfRetentionDistance).asFloat()
-        avBasinProportion = dataBlock.inputValue(TerroderNode.aBasinProportion).asFloat()
+        avSnowHeight = dataBlock.inputValue(TerroderNode.aSnowHeight).asFloat()
         newSimParams = TerroderSimulationParameters(avCellSize, avGridScale, avUpliftMapFile, avMinUpliftRatio, 
                                                     avRelUpliftScale, avRelErosionScale, avWaterHalfRetentionDist)
         # Params for menu button control, not editable in attribute editor
@@ -404,7 +405,7 @@ class TerroderNode(om.MPxNode):
         outputMeshHandle: om.MDataHandle = dataBlock.outputValue(TerroderNode.aOutputMesh)
         dataCreator: om.MFnMeshData = om.MFnMeshData()
         outputData: om.MObject = dataCreator.create()
-        self.createOutputMesh(outputData, numIterations, avBasinProportion)
+        self.createOutputMesh(outputData, numIterations, avWaterHalfRetentionDist, avSnowHeight)
         outputMeshHandle.setMObject(outputData)
         outputMeshHandle.setClean()
         
@@ -490,7 +491,7 @@ class TerroderNode(om.MPxNode):
 
         return drainageAreaMap
 
-    def createOutputMesh(self, outputData: om.MObject, numIterations: int, basinProportion: float):
+    def createOutputMesh(self, outputData: om.MObject, numIterations: int, waterDistanceConstant: float, snowHeight: float):
         if numIterations >= len(self.heightMapTs):
             raise RuntimeError(f"No height map corresponding to {numIterations} iterations.")
 
@@ -499,7 +500,7 @@ class TerroderNode(om.MPxNode):
         polygonConnects = []
 
         heightMap: np.ndarray = self.heightMapTs[numIterations]
-        gridColors: np.ndarray = self.getGridColors(heightMap, basinProportion)
+        gridColors: np.ndarray = self.getGridColors(heightMap, waterDistanceConstant, snowHeight)
 
         # center at (0, 0)
         xMin = -0.5 * self.simParams.cellSize * (heightMap.shape[0] - 1)
@@ -533,42 +534,30 @@ class TerroderNode(om.MPxNode):
 
         return meshObj
     
-    def getGridColors(self, heightMap: np.ndarray, basinProportion: float) -> np.ndarray:
-        # Compute height map threshold for which approximately riverProportion of cells are above 
-        # by binary search; invariant: true proportion within [lo, hi]
-        chm = heightMap[1:heightMap.shape[0]-1][1:heightMap.shape[1]-1]
-        lo = 0.0
-        hi = 1.0
-        for _ in range(12):
-            testThreshold = (lo + hi) / 2.0
-            belowThresholdMap = np.less(np.subtract(chm, testThreshold), 0)
-            belowThresholdProportion = np.mean(belowThresholdMap.astype(np.float64))
-            if belowThresholdProportion < basinProportion:
-                lo = testThreshold  # threhsold is too low, raise it
-            else:
-                hi = testThreshold
+    def getGridColors(self, heightMap: np.ndarray, waterDistanceConstant: float, snowHeight: float) -> np.ndarray:
+        # Start by making all pits water
+        isWater = np.full(heightMap.shape, True, dtype=np.bool8)
+        for i in range(heightMap.shape[0]):
+            for k in range(heightMap.shape[1]):
+                neighborCells = [c for c in self.getNeighborCells((i, k)) if self.cellInBounds(c)]
+                for ni, nk in neighborCells:
+                    if heightMap[i][k] > heightMap[ni][nk]:
+                        isWater[i][k] = False
+                        break
         
-        basinThreshold = (lo + hi) / 2.0
-        isWater = np.less(heightMap, basinThreshold)
+        # Then pass water along its steepest upward slope to form rivers
         frontier = []
         for i in range(isWater.shape[0]):
             for k in range(isWater.shape[1]):
                 if isWater[i][k]:
                     frontier.append((i, k))
-        
-        frontierSizes = []
         while len(frontier) > 0:
-            frontierSizes.append(len(frontier))
             next_frontier = []
             for i, k in frontier:
-                neighborCells = self.getNeighborCells((i, k))
-                
+                neighborCells = [c for c in self.getNeighborCells((i, k)) if self.cellInBounds(c)]
                 maxIncr = 0
                 upperNeighbor = None
                 for ni, nk in neighborCells:
-                    if not self.cellInBounds((ni, nk)):
-                        continue
-                    
                     incr = heightMap[ni][nk] - heightMap[i][k]
                     if incr > maxIncr:
                         maxIncr = incr
@@ -582,16 +571,54 @@ class TerroderNode(om.MPxNode):
                     isWater[ni][nk] = True
                     next_frontier.append((ni, nk))
             frontier = next_frontier
+        
+        # Then mark each cell with its distance from water to measure its wetness
+        distanceFromWater = np.full(heightMap.shape, -1, dtype=np.int32)
+        frontier = []
+        for i in range(isWater.shape[0]):
+            for k in range(isWater.shape[1]):
+                if isWater[i][k]:
+                    distanceFromWater[i][k] = 0
+                    frontier.append((i, k))
+        curDistance = 0
+        while len(frontier) > 0:
+            curDistance += 1
+            next_frontier = []
+            for i, k in frontier:
+                for ni, nk in [c for c in self.getNeighborCells((i, k)) if self.cellInBounds(c)]:
+                    if distanceFromWater[ni][nk] >= 0:
+                        continue  # already reached here
+                    distanceFromWater[ni][nk] = curDistance
+                    next_frontier.append((ni, nk))
+            
+            frontier = next_frontier
 
-        om.MGlobal.displayInfo(f"frontier sizes: {frontierSizes}")
 
+        waterColor = np.array([65.0, 107.0, 223.0]) / 255.0
+        desertColor = np.array([238.0, 206.0, 130.0]) / 255.0
+        wetlandColor = np.array([76.0, 187.0, 23.0]) / 255.0
+        mountainColor = np.array([0.91, 0.89, 0.86])
+        snowColor = np.array([243.0, 252.0, 255.0]) / 255.0
+
+        # Water cells are colored with water; snow cells are colored with snow
+        # For other cells, interpolate between wetland/desert colors based on wetness, then interpolate with mountain color based on height
         colors: np.ndarray = np.empty((heightMap.shape[0], heightMap.shape[1], 3))
         for i in range(colors.shape[0]):
             for k in range(colors.shape[1]):
                 if isWater[i][k]:
-                    colors[i][k][:] = np.array([0.0, 0.0, 1.0])
-                else:
-                    colors[i][k][:] = np.array([0.0, 1.0, 0.0])
+                    colors[i][k][:] = waterColor
+                    continue
+                if heightMap[i][k] > snowHeight:
+                    colors[i][k][:] = snowColor
+                    continue
+
+                relDistance = distanceFromWater[i][k] * self.simParams.cellSize / waterDistanceConstant
+                wetness = max(1.0 - (relDistance / 8), 0)
+                
+                color = (1.0 - wetness) * desertColor + wetness * wetlandColor  # wetness interpolation
+                heightFraction = heightMap[i][k] / snowHeight
+                color = (1.0 - heightFraction) * color + heightFraction * mountainColor  # height/mountain-ness interpolation
+                colors[i][k][:] = np.array(color)
         
         return colors
     
@@ -632,6 +659,7 @@ class TerroderUI(object):
         terrainTransformNodeName = cmds.createNode("transform", n="terrainTransform#")
         terrainVisibleMeshNodeName = cmds.createNode("mesh", parent=terrainTransformNodeName, n="terrainMesh#")
 
+        # Create a lambert shader to shade the output
         lambertShaderName = cmds.shadingNode('lambert', asShader=True, name='lambert_shader#')
         lambertShaderSet = cmds.sets(renderable=True, noSurfaceShader=True, empty=True)
         cmds.connectAttr(lambertShaderName + '.outColor', lambertShaderSet + '.surfaceShader', force=True)
