@@ -240,7 +240,7 @@ class TerroderNode(om.MPxNode):
         nAttr.default = 1.0
         nAttr.setMin(0.0)
 
-        TerroderNode.aWaterHalfRetentionDistance = nAttr.create("waterHalfRetentionDistance", "whr", om.MFnNumericData.kFloat)
+        TerroderNode.aWaterHalfRetentionDistance = nAttr.create("waterRetentionConstant", "wrc", om.MFnNumericData.kFloat)
         MAKE_INPUT(nAttr)
         nAttr.default = 1.0
         nAttr.setMin(0.001)
@@ -648,6 +648,7 @@ class TerroderUI(object):
         TerroderUI.createdMenuName = cmds.menu(l="Terroder", p=mainWindowName)
         cmds.menuItem(l="Create Terroder Mesh", p=TerroderUI.createdMenuName, c=TerroderUI._createNode)
         cmds.menuItem(l="Save/Load Timestamps", p=TerroderUI.createdMenuName, c=TerroderUI._createSavePointWindow)
+        cmds.menuItem(l="Help", p=TerroderUI.createdMenuName, c=TerroderUI._showHelpMenu)
 
     @staticmethod
     def destroyMenu():
@@ -765,6 +766,19 @@ class TerroderUI(object):
         cmds.setParent( '..' )
 
         cmds.showWindow("savePointWindow")
+    
+    @staticmethod
+    def _showHelpMenu(*args):
+        messageLines = [
+            "This is Terroder, a plugin for creating realistic terrain.",
+            "Use Terroder > Create Terroder Mesh to create a mesh terrain connected to a TerroderNode.",
+            "The TerroderNode is a dependency graph node and can be accessed from the dependency graph or the attribute editor.",
+            "Alter the properties in the TerroderNode to change the appearance of the terrain."
+        ]
+        okStr = 'OK'
+        titleStr = 'Terroder Help'
+        
+        cmds.confirmDialog(title=titleStr, message='\n'.join(messageLines), button=okStr, defaultButton=okStr, cancelButton=okStr)
     
     @staticmethod
     def getScrollListName():
