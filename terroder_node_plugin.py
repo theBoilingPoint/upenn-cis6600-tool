@@ -543,8 +543,15 @@ class TerroderNode(om.MPxNode):
             self.prevStartNewSimulationToggleValue = startNewSimulationVal
             TerroderNode.retrievedHeightMap = None
             self.heightMapTs = []
-            TerroderUI._loadAllSavedHeightMaps()
-
+            if self.loadedKey:
+                cmds.iconTextScrollList(
+                    TerroderUI.getScrollListName(),
+                    edit=True,
+                    itemTextColor=[TerroderNode.getKeyIndex(self.loadedKey)]
+                    + TerroderUI.getDefaultTextColour(),
+                )
+            self.loadedKey = None
+                    
         if deleteTimestampVal != self.prevDeleteTimestampToggleValue:
             self.prevDeleteTimestampToggleValue = deleteTimestampVal
             selectedItemList = TerroderUI.getSelectedListItem()
