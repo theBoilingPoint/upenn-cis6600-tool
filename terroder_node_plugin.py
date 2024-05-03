@@ -526,14 +526,14 @@ class TerroderNode(om.MPxNode):
                     )
 
                 self.loadedKey = key
-                
+
                 cmds.iconTextScrollList(
                     TerroderUI.getScrollListName(),
                     edit=True,
                     itemTextColor=[TerroderNode.getKeyIndex(self.loadedKey)]
                     + TerroderUI.getSelectedTextColour(),
                 )
-                
+
                 print("Loaded heightmap with key: ", key)
             else:
                 print(" No timestamp is selected from the list.")
@@ -566,7 +566,7 @@ class TerroderNode(om.MPxNode):
                 else:
                     TerroderNode.retrievedHeightMap = None
                     self.loadedKey = None
-                
+
                 print("Deleted heightmap with key: ", key)
             else:
                 print("No timestamp is selected from the list.")
@@ -917,12 +917,12 @@ class TerroderUI(object):
     """
     Static class to organize UI info
     """
+
     minWidth = 400
     createdMenuName = ""
     scrollListName = ""
     selectedListItem = None
     selectedNodeName = None
-
 
     @staticmethod
     def createMenu():
@@ -1036,10 +1036,10 @@ class TerroderUI(object):
         else:
             print(f"Node {selected[0]} doesn't have attribute {attrName}.")
             return
-        
+
         cmds.iconTextScrollList(
-                    TerroderUI.getScrollListName(), edit=True, deselectAll=True
-                )
+            TerroderUI.getScrollListName(), edit=True, deselectAll=True
+        )
 
     @staticmethod
     def _toggleSaveTimestamp(*args) -> None:
@@ -1073,11 +1073,13 @@ class TerroderUI(object):
         if cmds.window("savePointWindow", exists=True):
             cmds.deleteUI("savePointWindow")
 
-        cmds.window("savePointWindow", title="Saved Terroder Meshes", width=TerroderUI.minWidth)
+        cmds.window(
+            "savePointWindow", title="Saved Terroder Meshes", width=TerroderUI.minWidth
+        )
 
         cmds.menuBarLayout()  # Need to call this first before adding a menu
-        parent = cmds.menu(label="Mesh List")
-        cmds.menuItem(label="New")
+        # parent = cmds.menu(label="Mesh List")
+        # cmds.menuItem(label="New")
 
         cmds.paneLayout()
         TerroderUI.scrollListName = cmds.iconTextScrollList(
@@ -1089,12 +1091,26 @@ class TerroderUI(object):
         TerroderUI._loadAllSavedHeightMaps()
 
         cmds.columnLayout()
-        cmds.button(label="Save Timestamp", command=TerroderUI._toggleSaveTimestamp, width=TerroderUI.minWidth)
-        cmds.button(label="Load Timestamp", command=TerroderUI._toggleLoadTimestamp, width=TerroderUI.minWidth)
         cmds.button(
-            label="Start New Simulation", command=TerroderUI._toggleStartNewSimulation, width=TerroderUI.minWidth
+            label="Save Timestamp",
+            command=TerroderUI._toggleSaveTimestamp,
+            width=TerroderUI.minWidth,
         )
-        cmds.button(label="Delete Timestamp", command=TerroderUI._toggleDeleteTimestamp, width=TerroderUI.minWidth)
+        cmds.button(
+            label="Load Timestamp",
+            command=TerroderUI._toggleLoadTimestamp,
+            width=TerroderUI.minWidth,
+        )
+        cmds.button(
+            label="Start New Simulation",
+            command=TerroderUI._toggleStartNewSimulation,
+            width=TerroderUI.minWidth,
+        )
+        cmds.button(
+            label="Delete Timestamp",
+            command=TerroderUI._toggleDeleteTimestamp,
+            width=TerroderUI.minWidth,
+        )
 
         # Get current time on timeline as float
         cmds.setParent("..")
@@ -1106,60 +1122,165 @@ class TerroderUI(object):
         defaultMsg = [
             "This is Terroder, a plugin for creating realistic terrain.",
             "The TerroderNode is a dependency graph node and can be accessed from the dependency graph or the attribute editor.",
-            "Alter the properties in the attribute editor to change the appearance of the terrain."
+            "Alter the properties in the attribute editor to change the appearance of the terrain.",
         ]
 
         manageTimestampsMsg = [
             "Save or load the mesh and parameters of the currently selected timestamp. A saved timestamp can also be deleted.",
             "Once a timestamp is loaded, it will be highlighted in green.",
-            "All changes to the attributes will be applied on the loaded timestamp unless the Start New Simulation button is clicked."
+            "All changes to the attributes will be applied on the loaded timestamp unless the Start New Simulation button is clicked.",
         ]
 
         if cmds.window("helpWindow", exists=True):
             cmds.deleteUI("helpWindow")
 
-        cmds.window("helpWindow", title="Terroder Help", width=TerroderUI.minWidth, sizeable=False)
+        cmds.window(
+            "helpWindow",
+            title="Terroder Help",
+            width=TerroderUI.minWidth,
+            sizeable=False,
+        )
 
         mainTitleCol = [0.5, 0.5, 0.5]
         subTitleCol = [0.35, 0.35, 0.35]
-        cmds.columnLayout( adjustableColumn=True )
+        cmds.columnLayout(adjustableColumn=True)
         # Default message
-        cmds.text(label="\n".join(defaultMsg), align='left')
-        cmds.text(label="\n", align='left')
+        cmds.text(label="\n".join(defaultMsg), align="left")
+        cmds.text(label="\n", align="left")
         # Menu bar message
-        cmds.text(label="Menu Bar Items", align='left', font="boldLabelFont", backgroundColor=mainTitleCol)
-        cmds.text(label="Create Terroder Mesh", align='left', font="smallBoldLabelFont", backgroundColor=subTitleCol)
-        cmds.text(label="Create a mesh terrain connected to a TerroderNode.", align='left')
+        cmds.text(
+            label="Menu Bar Items",
+            align="left",
+            font="boldLabelFont",
+            backgroundColor=mainTitleCol,
+        )
+        cmds.text(
+            label="Create Terroder Mesh",
+            align="left",
+            font="smallBoldLabelFont",
+            backgroundColor=subTitleCol,
+        )
+        cmds.text(
+            label="Create a mesh terrain connected to a TerroderNode.", align="left"
+        )
 
-        cmds.text(label="Manage Timestamps", align='left', font="smallBoldLabelFont", backgroundColor=subTitleCol)
-        cmds.text(label="\n".join(manageTimestampsMsg), align='left')
+        cmds.text(
+            label="Manage Timestamps",
+            align="left",
+            font="smallBoldLabelFont",
+            backgroundColor=subTitleCol,
+        )
+        cmds.text(label="\n".join(manageTimestampsMsg), align="left")
 
-        cmds.text(label="Help", align='left', font="smallBoldLabelFont", backgroundColor=subTitleCol)
-        cmds.text(label="Invoke the help menu.", align='left')
-        cmds.text(label="\n", align='left')
+        cmds.text(
+            label="Help",
+            align="left",
+            font="smallBoldLabelFont",
+            backgroundColor=subTitleCol,
+        )
+        cmds.text(label="Invoke the help menu.", align="left")
+        cmds.text(label="\n", align="left")
         # Attribute bar message
-        cmds.text(label="Node Attributes", align='left', font="boldLabelFont", backgroundColor=mainTitleCol)
-        cmds.text(label="Time", align='left', font="smallBoldLabelFont", backgroundColor=subTitleCol)
-        cmds.text(label="The currently selected timestamp.", align='left')
+        cmds.text(
+            label="Node Attributes",
+            align="left",
+            font="boldLabelFont",
+            backgroundColor=mainTitleCol,
+        )
+        cmds.text(
+            label="Time",
+            align="left",
+            font="smallBoldLabelFont",
+            backgroundColor=subTitleCol,
+        )
+        cmds.text(label="The currently selected timestamp.", align="left")
 
-        cmds.text(label="Uplift Map File", align='left', font="smallBoldLabelFont", backgroundColor=subTitleCol)
-        cmds.text(label="The uplift map texture to guide the simulation.", align='left')
+        cmds.text(
+            label="Uplift Map File",
+            align="left",
+            font="smallBoldLabelFont",
+            backgroundColor=subTitleCol,
+        )
+        cmds.text(label="The uplift map texture to guide the simulation.", align="left")
 
-        cmds.text(label="Min Uplift Ratio", align='left', font="smallBoldLabelFont", backgroundColor=subTitleCol)
+        cmds.text(
+            label="Min Uplift Ratio",
+            align="left",
+            font="smallBoldLabelFont",
+            backgroundColor=subTitleCol,
+        )
+        cmds.text(
+            label="Rescales the uplift found in the texture. The texture is grayscale is normally in the range [0,1]. This attribute rescales the range to [min uplift ratio, 1].",
+            align="left",
+        )
 
-        cmds.text(label="Cell Size", align='left', font="smallBoldLabelFont", backgroundColor=subTitleCol)
-        cmds.text(label="The size of a grid for the terrain mesh.", align='left')
+        cmds.text(
+            label="Cell Size",
+            align="left",
+            font="smallBoldLabelFont",
+            backgroundColor=subTitleCol,
+        )
+        cmds.text(label="The size of a grid for the terrain mesh.", align="left")
 
-        cmds.text(label="Grid Scale X", align='left', font="smallBoldLabelFont", backgroundColor=subTitleCol)
-        cmds.text(label="The width of the terrain mesh.", align='left')
+        cmds.text(
+            label="Grid Scale X",
+            align="left",
+            font="smallBoldLabelFont",
+            backgroundColor=subTitleCol,
+        )
+        cmds.text(label="The width of the terrain mesh.", align="left")
 
-        cmds.text(label="Grid Scale Z", align='left', font="smallBoldLabelFont", backgroundColor=subTitleCol)
-        cmds.text(label="The height of the terrain mesh.", align='left')
+        cmds.text(
+            label="Grid Scale Z",
+            align="left",
+            font="smallBoldLabelFont",
+            backgroundColor=subTitleCol,
+        )
+        cmds.text(label="The height of the terrain mesh.", align="left")
 
-        cmds.text(label="Uplift Relative Scale", align='left', font="smallBoldLabelFont", backgroundColor=subTitleCol)
-        cmds.text(label="Erosion Relative Scale", align='left', font="smallBoldLabelFont", backgroundColor=subTitleCol)
-        cmds.text(label="Water Retention Constant", align='left', font="smallBoldLabelFont", backgroundColor=subTitleCol)
-        cmds.text(label="Snow Height", align='left', font="smallBoldLabelFont", backgroundColor=subTitleCol)
+        cmds.text(
+            label="Uplift Relative Scale",
+            align="left",
+            font="smallBoldLabelFont",
+            backgroundColor=subTitleCol,
+        )
+        cmds.text(
+            label="Multiply the uplift term in the simulation by the provided value.",
+            align="left",
+        )
+
+        cmds.text(
+            label="Erosion Relative Scale",
+            align="left",
+            font="smallBoldLabelFont",
+            backgroundColor=subTitleCol,
+        )
+        cmds.text(
+            label="Multiply the erosion term in the simulation by the provided value.",
+            align="left",
+        )
+
+        cmds.text(
+            label="Water Retention Constant",
+            align="left",
+            font="smallBoldLabelFont",
+            backgroundColor=subTitleCol,
+        )
+        cmds.text(
+            label="Affects the decay of water in the drainage area computation. The higher the value, the slower the decay.",
+            align="left",
+        )
+
+        cmds.text(
+            label="Snow Height",
+            align="left",
+            font="smallBoldLabelFont",
+            backgroundColor=subTitleCol,
+        )
+        cmds.text(
+            label="For texturing purposes only. Parts of the terrain higher the provided value will appear snowy.",
+            align="left",
+        )
 
         cmds.showWindow("helpWindow")
 
