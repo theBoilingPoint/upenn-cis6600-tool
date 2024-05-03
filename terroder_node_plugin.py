@@ -536,14 +536,16 @@ class TerroderNode(om.MPxNode):
     
     def getGridColors(self, heightMap: np.ndarray, waterDistanceConstant: float, snowHeight: float) -> np.ndarray:
         # Start by making all pits water
-        isWater = np.full(heightMap.shape, True, dtype=np.bool8)
-        for i in range(heightMap.shape[0]):
-            for k in range(heightMap.shape[1]):
+        isWater = np.full(heightMap.shape, False, dtype=np.bool8)
+        for i in range(1, heightMap.shape[0] - 1):
+            for k in range(1, heightMap.shape[1] - 1):
+                cellHeight = heightMap[i][k]
                 neighborCells = [c for c in self.getNeighborCells((i, k)) if self.cellInBounds(c)]
+                nLowerNeighbors = 0
                 for ni, nk in neighborCells:
-                    if heightMap[i][k] > heightMap[ni][nk]:
-                        isWater[i][k] = False
-                        break
+                    if heightMap[ni][nk] < cellHeight:
+                        nLowerNeighbors += 1
+                isWater[i][k] = nLowerNeighbors <= 1
         
         # Then pass water along its steepest upward slope to form rivers
         frontier = []
@@ -571,6 +573,23 @@ class TerroderNode(om.MPxNode):
                     isWater[ni][nk] = True
                     next_frontier.append((ni, nk))
             frontier = next_frontier
+        
+        # Remove from being water if it doesn't have a certain number of water neighbors.
+        demoteFromWater = []
+        for i in range(1, heightMap.shape[0] - 1):
+            for k in range(1, heightMap.shape[1] - 1):
+                if isWater[i][k]:    
+                    neighborCells = [c for c in self.getNeighborCells((i, k)) if self.cellInBounds(c)]
+                    nWaterNeighbors = 0
+                    for ni, nk in neighborCells:
+                        if isWater[ni][nk]:
+                            nWaterNeighbors += 1
+                    
+                    if nWaterNeighbors < len(neighborCells) * 0.6:
+                        demoteFromWater.append((i, k))
+        
+        for i, k in demoteFromWater:
+            isWater[i][k] = False
         
         # Then mark each cell with its distance from water to measure its wetness
         distanceFromWater = np.full(heightMap.shape, -1, dtype=np.int32)
