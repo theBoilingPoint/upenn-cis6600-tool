@@ -1,5 +1,7 @@
 from datetime import datetime
 
+import sys
+import os
 import maya.api.OpenMaya as om
 import maya.cmds as cmds
 import cv2
@@ -7,8 +9,8 @@ import cv2
 import numpy as np
 from typing import Tuple
 
-from modules.sim_params import TerroderSimulationParameters
-from modules.ui import TerroderUI
+from sim_params import TerroderSimulationParameters
+from ui import TerroderUI
 
 maya_useNewAPI = True
 
@@ -265,9 +267,7 @@ class TerroderNode(om.MPxNode):
         gridScale = TerroderNode.savedHeightMaps[key][1].targetGridScale
         relUpliftScale = TerroderNode.savedHeightMaps[key][1].relUpliftScale
         relErosionScale = TerroderNode.savedHeightMaps[key][1].relErosionScale
-        waterHalfRetentionDist = TerroderNode.savedHeightMaps[key][
-            1
-        ].waterHalfRetentionDist
+        waterHalfRetentionDist = TerroderNode.savedHeightMaps[key][1].waterHalfRetentionDist
 
         newSimParams.setUpliftMapFile(upliftMapFile)
         newSimParams.setMinUpliftRatio(minUpliftRatio)
@@ -446,7 +446,7 @@ class TerroderNode(om.MPxNode):
                 "[DEBUG] Using new sim params and resetting simulation"
             )
             self.simParams = newSimParams
-            if TerroderNode.retrievedHeightMap:
+            if TerroderNode.retrievedHeightMap is not None:
                 cv2shape = (
                     self.simParams.gridShape[1],
                     self.simParams.gridShape[0],
