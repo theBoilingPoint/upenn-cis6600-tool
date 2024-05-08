@@ -297,6 +297,7 @@ class TerroderUI(object):
             "This is Terroder, a plugin for creating realistic terrain.",
             "The TerroderNode is a dependency graph node and can be accessed from the dependency graph or the attribute editor.",
             "Alter the properties in the attribute editor to change the appearance of the terrain.",
+            "To see colored texturing: select the output mesh and use Mesh Display > Toggle Display Colors Attribute."
         ]
 
         manageTimestampsMsg = [
