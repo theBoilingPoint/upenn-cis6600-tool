@@ -8,6 +8,7 @@ from typing import Tuple
 
 import maya.api.OpenMaya as om
 import maya.cmds as cmds
+import maya.mel as mm
 
 maya_useNewAPI = True
 
@@ -24,11 +25,6 @@ def MAKE_OUTPUT(attr):
     attr.storable = False
     attr.readable = True
     attr.writable = False
-
-import maya.cmds as cmds
-import maya.mel as mm
-
-import maya.api.OpenMaya as om
 
 class TerroderSimulationParameters(object):
     # Intended to be read-only. If you need to change values, you need a new TerroderSimulationParameters object.
@@ -163,10 +159,9 @@ class TerroderUI(object):
         TerroderUI.createdMenuName = cmds.menu(l="Terroder", p=mainWindowName)
         cmds.menuItem(l="Create Terroder Mesh", p=TerroderUI.createdMenuName, c=TerroderUI._createNode)
         cmds.menuItem(l="Manage Timestamps", p=TerroderUI.createdMenuName, c=TerroderUI._createSavePointWindow)
-        cmds.menuItem(l="Help", p=TerroderUI.createdMenuName, c=TerroderUI._showHelpMenu)
         cmds.menuItem(l="Add River Source", p=TerroderUI.createdMenuName, c=TerroderNode._addRiverSources)
-    
-
+        cmds.menuItem(l="Help", p=TerroderUI.createdMenuName, c=TerroderUI._showHelpMenu)
+        
     @staticmethod
     def destroyMenu():
         cmds.deleteUI(TerroderUI.createdMenuName)
